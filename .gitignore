@@ -1,0 +1,16 @@
+# Secrets — never commit
+.env
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated reports / temp
+outputs/
+*.docx
+~$*
+
+# Sample / patient chat data — never deploy
+*.zip
+extract_*/
