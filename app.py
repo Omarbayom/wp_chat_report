@@ -28,8 +28,7 @@ from wa_report.render_docx import render_docx
 
 
 def generate_docx(
-    zip_bytes: bytes,
-    zip_name: str,
+    uploads: list[tuple[str, bytes]],
     hospital: str,
     patient: str,
     mode: str,
@@ -37,17 +36,22 @@ def generate_docx(
     buffer_minutes: int,
     max_dim: int,
 ) -> Path:
-    """Extract the upload, build the report, render a single .docx, return its path.
+    """Extract the upload(s), build the report, render a single .docx, return its path.
 
-    The temp dir is intentionally left on disk for the duration of the Streamlit
-    run so the file can be streamed for download.
+    Multiple ZIPs are dropped into one folder; build_report extracts each into its
+    own subfolder and merges every chat into a single timeline sorted by time
+    (identical transcripts are de-duplicated). The temp dir is intentionally left
+    on disk for the duration of the Streamlit run so the file can be downloaded.
     """
     work_dir = Path(tempfile.mkdtemp(prefix="wa_report_gui_"))
     # build_report auto-extracts WhatsApp .zip exports found in the folder.
-    safe_name = Path(zip_name).name or "chat.zip"
-    if not safe_name.lower().endswith(".zip"):
-        safe_name += ".zip"
-    (work_dir / safe_name).write_bytes(zip_bytes)
+    for i, (zip_name, zip_bytes) in enumerate(uploads):
+        safe_name = Path(zip_name).name or "chat.zip"
+        if not safe_name.lower().endswith(".zip"):
+            safe_name += ".zip"
+        # Prefix keeps each upload's extraction folder distinct even if two
+        # uploads share the same filename.
+        (work_dir / f"{i:02d}_{safe_name}").write_bytes(zip_bytes)
 
     report = build_report(
         [work_dir],
@@ -85,12 +89,15 @@ def generate_docx(
 st.set_page_config(page_title="WA Ventilation Report", page_icon="🫁", layout="centered")
 st.title("🫁 WhatsApp → Ventilation Monitoring Report")
 st.caption(
-    "Upload a WhatsApp export ZIP. Hospital and patient names are optional. "
-    "Generate a Word (.docx) report and download it."
+    "Upload one or more WhatsApp export ZIPs — multiple chats are merged into a "
+    "single timeline. Hospital and patient names are optional. Generate a Word "
+    "(.docx) report and download it."
 )
 
 with st.form("report_form"):
-    uploaded = st.file_uploader("WhatsApp export (.zip)", type=["zip"])
+    uploaded = st.file_uploader(
+        "WhatsApp export(s) (.zip)", type=["zip"], accept_multiple_files=True
+    )
 
     col1, col2 = st.columns(2)
     with col1:
@@ -118,8 +125,8 @@ with st.form("report_form"):
     submitted = st.form_submit_button("Generate report", type="primary")
 
 if submitted:
-    if uploaded is None:
-        st.error("Please upload a WhatsApp export ZIP file first.")
+    if not uploaded:
+        st.error("Please upload at least one WhatsApp export ZIP file first.")
     else:
         hospital_val = hospital.strip() or "—"
         patient_val = patient.strip() or "—"
@@ -127,8 +134,7 @@ if submitted:
         with st.spinner("Generating report…"):
             try:
                 docx_path = generate_docx(
-                    zip_bytes=uploaded.getvalue(),
-                    zip_name=uploaded.name,
+                    uploads=[(f.name, f.getvalue()) for f in uploaded],
                     hospital=hospital_val,
                     patient=patient_val,
                     mode=mode,
