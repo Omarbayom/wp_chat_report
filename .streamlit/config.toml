@@ -1,0 +1,7 @@
+[server]
+# Max size (in MB) for a single uploaded file. Default is 200.
+# Raised so large WhatsApp exports (media-heavy chats) can be uploaded.
+maxUploadSize = 2048
+# Max size (in MB) for a single websocket message; keep >= maxUploadSize so
+# large uploads are not rejected before the file finishes transferring.
+maxMessageSize = 2048
