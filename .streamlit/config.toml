@@ -1,7 +1,10 @@
 [server]
 # Max size (in MB) for a single uploaded file. Default is 200.
-# Raised so large WhatsApp exports (media-heavy chats) can be uploaded.
-maxUploadSize = 2048
-# Max size (in MB) for a single websocket message; keep >= maxUploadSize so
-# large uploads are not rejected before the file finishes transferring.
-maxMessageSize = 2048
+# Sized to the most the free Streamlit Community Cloud tier (1 GB RAM/app) can
+# reliably handle: app baseline (~350 MB) + ~2x the upload held in memory +
+# image-processing headroom must stay under 1 GB, which caps a safe upload at
+# ~300 MB. Larger files risk an out-of-memory crash on the free tier.
+maxUploadSize = 300
+# Max websocket message size (MB); keep >= maxUploadSize so large uploads are
+# not rejected before the transfer finishes.
+maxMessageSize = 300
