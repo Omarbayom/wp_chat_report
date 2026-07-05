@@ -11,6 +11,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
 from docx.shared import Inches, Pt, RGBColor
 
 from . import media
@@ -41,6 +42,13 @@ def _label(doc, text):
     return p
 
 
+def _keep_row_together(row):
+    """Stop a table row from splitting across a page so an image and its time
+    caption never end up on different pages (image on page 1, stamp on page 2)."""
+    trPr = row._tr.get_or_add_trPr()
+    trPr.append(OxmlElement("w:cantSplit"))
+
+
 def _flush_images(doc, imgs, cache):
     """Render a run of consecutive images as a centered grid with time captions."""
     if not imgs:
@@ -48,6 +56,8 @@ def _flush_images(doc, imgs, cache):
     n = len(imgs)
     nrows = (n + _PHOTOS_PER_ROW - 1) // _PHOTOS_PER_ROW
     grid = doc.add_table(rows=nrows, cols=_PHOTOS_PER_ROW)
+    for row in grid.rows:
+        _keep_row_together(row)
     for i, (path, dt) in enumerate(imgs):
         cell = grid.cell(i // _PHOTOS_PER_ROW, i % _PHOTOS_PER_ROW)
         para = cell.paragraphs[0]
@@ -94,14 +104,11 @@ def render_docx(report: Report, out_path: Path, cache: media.MediaCache) -> Path
 
     # Profile table
     rows = [
-        ("Patient", report.patient),
+        ("Device", report.patient),
         ("Date In", report.date_in_str),
         ("Date Out", report.date_out_str),
         ("Duration", f"{report.duration_days} day(s)"),
-        ("Respiratory therapist(s)", ", ".join(report.rts) or "-"),
-        ("Source chats", str(report.chat_count)),
-        ("Days", str(len(report.cycles))),
-        ("Photos", str(report.total_photos)),
+        ("Group members", ", ".join(report.members) or "-"),
     ]
     ptab = doc.add_table(rows=0, cols=2)
     ptab.style = "Light List Accent 1"

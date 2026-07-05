@@ -10,7 +10,7 @@ from typing import List, Tuple
 from . import media
 from .grouping import (Cycle, build_content, collect_untimed,
                        group_into_cycles, group_into_days, group_into_hours)
-from .parser import load_and_merge, rt_names
+from .parser import load_and_merge, real_senders, rt_names
 
 
 @dataclass
@@ -20,6 +20,7 @@ class Report:
     date_in: datetime
     date_out: datetime
     rts: List[str]
+    members: List[str]
     chat_count: int
     cycles: List[Cycle]
     untimed: List[Tuple[datetime, str, str]]
@@ -66,6 +67,7 @@ def build_report(folders, hospital: str, patient: str,
         date_in=real[0].dt,
         date_out=real[-1].dt,
         rts=rt_names(messages),
+        members=real_senders(messages),
         chat_count=len(chat_files),
         cycles=cycles,
         untimed=collect_untimed(messages),

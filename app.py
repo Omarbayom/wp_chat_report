@@ -78,8 +78,8 @@ def generate_docx(
         "chat_count": report.chat_count,
         "cycles": len(report.cycles),
         "photos": report.total_photos,
-        "date_in": report.date_in_str,
-        "date_out": report.date_out_str,
+        "Start Date": report.date_in_str,
+        "End Date": report.date_out_str,
     }
     return docx_path
 
@@ -103,7 +103,7 @@ with st.form("report_form"):
     with col1:
         hospital = st.text_input("Hospital name (optional)", value="")
     with col2:
-        patient = st.text_input("Patient name / ID (optional)", value="")
+        patient = st.text_input("Device name / ID (optional)", value="")
 
     with st.expander("Advanced options"):
         mode = st.selectbox(
@@ -152,7 +152,7 @@ if submitted:
             if meta:
                 st.success(
                     f"Done — {meta['chat_count']} chat(s), {meta['cycles']} cycle(s), "
-                    f"{meta['photos']} photo(s), {meta['date_in']} → {meta['date_out']}."
+                    f"{meta['photos']} photo(s), {meta['Start Date']} → {meta['End Date']}."
                 )
 
             st.subheader("Download")
