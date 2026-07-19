@@ -49,10 +49,18 @@ def _keep_row_together(row):
     trPr.append(OxmlElement("w:cantSplit"))
 
 
-def _flush_images(doc, imgs, cache):
-    """Render a run of consecutive images as a centered grid with time captions."""
+def _flush_images(doc, imgs, speaker, cache):
+    """Render a run of consecutive images (all from the same sender) as a centered
+    grid with time captions. The sender name is shown once, above the grid."""
     if not imgs:
         return
+    if speaker:
+        cap = doc.add_paragraph()
+        cap.paragraph_format.space_before = Pt(4)
+        cap.paragraph_format.space_after = Pt(1)
+        nrun = cap.add_run(f"{speaker}:")
+        nrun.bold = True
+        nrun.font.size = Pt(9.5)
     n = len(imgs)
     nrows = (n + _PHOTOS_PER_ROW - 1) // _PHOTOS_PER_ROW
     grid = doc.add_table(rows=nrows, cols=_PHOTOS_PER_ROW)
@@ -121,9 +129,20 @@ def render_docx(report: Report, out_path: Path, cache: media.MediaCache) -> Path
 
     # One section per day
     for c in report.cycles:
+        items = transcript(c)
+
         h = doc.add_heading(c.title, level=1)
         for run in h.runs:
             run.font.color.rgb = _ACCENT
+
+        # A window whose messages were all deleted (or otherwise empty) has
+        # nothing to render -- flag it instead of leaving a blank section.
+        if not items:
+            note = doc.add_paragraph("All messages in this window were deleted.")
+            note.runs[0].italic = True
+            note.runs[0].font.color.rgb = _MUTED
+            note.runs[0].font.size = Pt(9)
+            continue
 
         # Clinical summary (states noted that day) -- skipped when disabled
         if SHOW_DAILY_SUMMARY:
@@ -134,22 +153,29 @@ def render_docx(report: Report, out_path: Path, cache: media.MediaCache) -> Path
                     for ln in lines:
                         doc.add_paragraph(ln, style="List Bullet")
 
-        # Full chat, chronological, images inline (time only)
+        # Full chat, chronological, images inline (time only). Consecutive
+        # images from the same sender are one run, so the name shows once.
         img_run = []
+        run_speaker = None
         missing = 0
-        for it in transcript(c):
+        for it in items:
             if it.kind == "image":
                 p = media.resolve(it.name, it.source_dir)
                 if p is not None:
+                    if img_run and it.speaker != run_speaker:
+                        _flush_images(doc, img_run, run_speaker, cache)
+                        img_run = []
+                    run_speaker = it.speaker
                     img_run.append((p, it.dt))
                 else:
                     missing += 1
                 continue
-            _flush_images(doc, img_run, cache)
+            _flush_images(doc, img_run, run_speaker, cache)
             img_run = []
+            run_speaker = None
             _chat_line(doc, hm(it.dt), it.speaker, it.text,
                        muted=(it.kind == "media"))
-        _flush_images(doc, img_run, cache)
+        _flush_images(doc, img_run, run_speaker, cache)
 
         if missing:
             mp = doc.add_paragraph(

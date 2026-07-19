@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 # --- Make the wa_report package importable when run from this folder ---
 HERE = Path(__file__).resolve().parent
@@ -25,9 +26,10 @@ if str(HERE) not in sys.path:
 from wa_report import media
 from wa_report.report import build_report
 from wa_report.render_docx import render_docx
+from wa_report.render_html import render_html
 
 
-def generate_docx(
+def generate_reports(
     uploads: list[tuple[str, bytes]],
     hospital: str,
     patient: str,
@@ -35,13 +37,17 @@ def generate_docx(
     gap_minutes: int,
     buffer_minutes: int,
     max_dim: int,
-) -> Path:
-    """Extract the upload(s), build the report, render a single .docx, return its path.
+    formats: list[str],
+) -> dict[str, Path]:
+    """Extract the upload(s), build the report once, render the requested formats.
+
+    *formats* is any subset of {"docx", "html"}. Returns a mapping of format ->
+    output file path.
 
     Multiple ZIPs are dropped into one folder; build_report extracts each into its
     own subfolder and merges every chat into a single timeline sorted by time
     (identical transcripts are de-duplicated). The temp dir is intentionally left
-    on disk for the duration of the Streamlit run so the file can be downloaded.
+    on disk for the duration of the Streamlit run so the files can be downloaded.
     """
     work_dir = Path(tempfile.mkdtemp(prefix="wa_report_gui_"))
     # build_report auto-extracts WhatsApp .zip exports found in the folder.
@@ -62,7 +68,7 @@ def generate_docx(
         buffer_minutes=buffer_minutes,
     )
 
-    # Pre-process every image once; the renderer reuses the cache.
+    # Pre-process every image once; both renderers reuse the cache.
     cache = media.MediaCache(max_dim=max_dim)
     all_imgs = []
     for c in report.cycles:
@@ -71,8 +77,15 @@ def generate_docx(
     if all_imgs:
         cache.prewarm(all_imgs)
 
-    docx_path = work_dir / "report.docx"
-    render_docx(report, docx_path, cache)
+    outputs: dict[str, Path] = {}
+    if "docx" in formats:
+        docx_path = work_dir / "report.docx"
+        render_docx(report, docx_path, cache)
+        outputs["docx"] = docx_path
+    if "html" in formats:
+        html_path = work_dir / "report.html"
+        render_html(report, html_path, cache)
+        outputs["html"] = html_path
 
     st.session_state["_last_report_meta"] = {
         "chat_count": report.chat_count,
@@ -81,7 +94,7 @@ def generate_docx(
         "Start Date": report.date_in_str,
         "End Date": report.date_out_str,
     }
-    return docx_path
+    return outputs
 
 
 # ----------------------------- UI -----------------------------
@@ -105,18 +118,26 @@ with st.form("report_form"):
     with col2:
         patient = st.text_input("Device name / ID (optional)", value="")
 
+    output_formats = st.multiselect(
+        "Output format",
+        options=["Word (.docx)", "Interactive HTML"],
+        default=["Interactive HTML"],
+        help="Interactive HTML opens in any browser — search the chat and filter "
+        "by day, hour, and sender. Word (.docx) is the printable document.",
+    )
+
     with st.expander("Advanced options"):
         mode = st.selectbox(
             "Grouping mode",
             options=["daily", "hourly", "gap"],
-            index=0,
+            index=1,
             help="daily = one section per date, hourly = clock windows, gap = by inactivity.",
         )
         gap_minutes = st.number_input(
             "Gap minutes (gap mode)", min_value=1, max_value=240, value=15
         )
         buffer_minutes = st.number_input(
-            "Boundary buffer minutes (daily/hourly)", min_value=0, max_value=60, value=3
+            "Boundary buffer minutes (daily/hourly)", min_value=0, max_value=60, value=5
         )
         max_dim = st.number_input(
             "Max image dimension (px)", min_value=200, max_value=4000, value=1000, step=100
@@ -124,16 +145,21 @@ with st.form("report_form"):
 
     submitted = st.form_submit_button("Generate report", type="primary")
 
+_FORMAT_KEYS = {"Word (.docx)": "docx", "Interactive HTML": "html"}
+
 if submitted:
     if not uploaded:
         st.error("Please upload at least one WhatsApp export ZIP file first.")
+    elif not output_formats:
+        st.error("Please pick at least one output format.")
     else:
         hospital_val = hospital.strip() or "—"
         patient_val = patient.strip() or "—"
-        docx_path: Path | None = None
+        formats = [_FORMAT_KEYS[f] for f in output_formats]
+        outputs: dict[str, Path] = {}
         with st.spinner("Generating report…"):
             try:
-                docx_path = generate_docx(
+                outputs = generate_reports(
                     uploads=[(f.name, f.getvalue()) for f in uploaded],
                     hospital=hospital_val,
                     patient=patient_val,
@@ -141,13 +167,14 @@ if submitted:
                     gap_minutes=int(gap_minutes),
                     buffer_minutes=int(buffer_minutes),
                     max_dim=int(max_dim),
+                    formats=formats,
                 )
             except ValueError as exc:
                 st.error(f"Could not build the report: {exc}")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Unexpected error: {exc}")
 
-        if docx_path and docx_path.exists():
+        if outputs:
             meta = st.session_state.get("_last_report_meta", {})
             if meta:
                 st.success(
@@ -156,9 +183,22 @@ if submitted:
                 )
 
             st.subheader("Download")
-            st.download_button(
-                label="Download Word report (.docx)",
-                data=docx_path.read_bytes(),
-                file_name="report.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
+            if "docx" in outputs:
+                st.download_button(
+                    label="Download Word report (.docx)",
+                    data=outputs["docx"].read_bytes(),
+                    file_name="report.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            if "html" in outputs:
+                html_bytes = outputs["html"].read_bytes()
+                st.download_button(
+                    label="Download interactive report (.html)",
+                    data=html_bytes,
+                    file_name="report.html",
+                    mime="text/html",
+                )
+                with st.expander("Preview interactive report", expanded=True):
+                    components.html(
+                        html_bytes.decode("utf-8"), height=720, scrolling=True
+                    )
