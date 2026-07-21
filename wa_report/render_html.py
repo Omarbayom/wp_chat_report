@@ -16,11 +16,23 @@ from __future__ import annotations
 
 import html
 import json
+from datetime import datetime
 from pathlib import Path
 
 from . import media
 from .grouping import hm, transcript
 from .report import Report
+
+_EPOCH = datetime(1970, 1, 1)
+
+
+def _ms(dt: datetime) -> int:
+    """Milliseconds since 1970 treating the naive timestamp as wall-clock.
+
+    Must match ``cyclic_report``'s ``_ms`` so per-image anchors line up across
+    the two linked pages.
+    """
+    return int((dt - _EPOCH).total_seconds() * 1000)
 
 
 def _esc(text: str) -> str:
@@ -43,8 +55,18 @@ _AVATAR_COLORS = [
 ]
 
 
-def render_html(report: Report, out_path: Path, cache: media.MediaCache) -> Path:
-    """Build the interactive report at *out_path* and return it."""
+def render_html_str(report: Report, cache: media.MediaCache,
+                    chart_href: "str | None" = None, hour24: bool = False) -> str:
+    """Build the interactive chat report and return it as an HTML string.
+
+    When *chart_href* is given, each image gets a stable ``img-<ts>`` id (so the
+    charts page can deep-link to it) and a 📈 button that opens the charts page
+    at that moment (``<chart_href>?t=<ts>`` in a named tab).
+
+    *hour24* shows message times on a 24-hour clock (``HH:MM``) to match the
+    charts page instead of the default 12-hour am/pm.
+    """
+    seen_ts: set[int] = set()
     # --- Assign a stable colour to each speaker across the whole report. ---
     speakers: list[str] = []
     for c in report.cycles:
@@ -76,17 +98,21 @@ def render_html(report: Report, out_path: Path, cache: media.MediaCache) -> Path
                 day_labels[day_key] = it.dt.strftime("%d/%m/%Y")
                 days.append(day_key)
 
-            time_str = _esc(hm(it.dt))
+            time_str = _esc(it.dt.strftime("%H:%M") if hour24 else hm(it.dt))
             speaker = it.speaker or "System"
             color = speaker_color.get(speaker, "#7f8c8d")
+            ts = _ms(it.dt)
             # Text used for the free-text search (speaker + body, lower-cased).
             search_blob = _esc((speaker + " " + (it.text or "")).lower())
 
             common_attrs = (
                 f'class="msg" data-day="{day_key}" data-hour="{hour_key}" '
+                f'data-ts="{ts}" '
                 f'data-speaker="{_esc(speaker)}" data-search="{search_blob}"'
             )
 
+            row_id = ""
+            chart_link = ""
             if it.kind == "image":
                 p = media.resolve(it.name, it.source_dir)
                 uri = cache.data_uri(p) if p is not None else None
@@ -99,6 +125,15 @@ def render_html(report: Report, out_path: Path, cache: media.MediaCache) -> Path
                     f'alt="{_esc(it.name)}" '
                     f'onclick="openLightbox(this.src)">'
                 )
+                if chart_href:
+                    # First image at a given timestamp owns the anchor id.
+                    if ts not in seen_ts:
+                        row_id = f' id="img-{ts}"'
+                        seen_ts.add(ts)
+                    chart_link = (
+                        f'<a class="to-chart" href="{_esc(chart_href)}?t={ts}" '
+                        f'target="wa_charts" title="Show this moment on the chart">📈</a>'
+                    )
             elif it.kind == "media":
                 body = f'<span class="media-note">{_esc(it.text)}</span>'
             else:
@@ -106,11 +141,11 @@ def render_html(report: Report, out_path: Path, cache: media.MediaCache) -> Path
 
             total_msgs += 1
             rows.append(
-                f'<div {common_attrs}>'
+                f'<div {common_attrs}{row_id}>'
                 f'<div class="avatar" style="background:{color}">{_esc(_initials(speaker))}</div>'
                 f'<div class="bubble">'
                 f'<div class="meta"><span class="speaker" style="color:{color}">{_esc(speaker)}</span>'
-                f'<span class="time">{time_str}</span></div>'
+                f'<span class="time">{time_str}</span>{chart_link}</div>'
                 f'<div class="content">{body}</div>'
                 f'</div></div>'
             )
@@ -189,6 +224,13 @@ def render_html(report: Report, out_path: Path, cache: media.MediaCache) -> Path
         stats_json=stats_json,
         sections="\n".join(sections),
     )
+    return doc
+
+
+def render_html(report: Report, out_path: Path, cache: media.MediaCache,
+                chart_href: "str | None" = None, hour24: bool = False) -> Path:
+    """Write the interactive chat report to *out_path* and return it."""
+    doc = render_html_str(report, cache, chart_href=chart_href, hour24=hour24)
     out_path.write_text(doc, encoding="utf-8")
     return out_path
 
@@ -267,6 +309,11 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .meta {{ display:flex; gap:8px; align-items:baseline; }}
   .speaker {{ font-weight:600; font-size:13px; }}
   .time {{ font-size:11px; color:var(--muted); }}
+  .to-chart {{ margin-left:6px; font-size:12px; text-decoration:none; cursor:pointer;
+    background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:0 5px; }}
+  .to-chart:hover {{ background:#e7f0fb; }}
+  .msg:target {{ animation:flashmsg 1.8s ease-out; }}
+  @keyframes flashmsg {{ 0% {{ background:#fff3bf; }} 100% {{ background:transparent; }} }}
   .content {{ margin-top:1px; }}
   .text {{ white-space:pre-wrap; word-wrap:break-word; }}
   .media-note {{ color:var(--muted); font-style:italic; font-size:13px; }}
@@ -510,6 +557,31 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   }});
 
   applyFilters();
+
+  // Deep-link support: when the charts page opens this report at #img-<ts>,
+  // scroll that message into view once (lazy images shift layout, so re-run on
+  // load) and re-scroll if the hash changes while the tab is already open.
+  function gotoHash() {{
+    if (!location.hash) return;
+    let el = null;
+    try {{ el = document.querySelector(location.hash); }} catch (e) {{ return; }}
+    if (!el) return;
+    // Lazy images keep resizing after the jump, so re-centre until the target's
+    // position stops moving (or we give up after ~2.5s).
+    let tries = 0, last = NaN;
+    const tick = () => {{
+      el.scrollIntoView({{block: 'center'}});
+      const y = el.getBoundingClientRect().top;
+      tries += 1;
+      if ((isNaN(last) || Math.abs(y - last) > 4) && tries < 20) {{
+        last = y;
+        setTimeout(tick, 120);
+      }}
+    }};
+    tick();
+  }}
+  window.addEventListener('load', () => setTimeout(gotoHash, 60));
+  window.addEventListener('hashchange', gotoHash);
 </script>
 </body>
 </html>

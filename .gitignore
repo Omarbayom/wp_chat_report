@@ -14,3 +14,6 @@ outputs/
 # Sample / patient chat data — never deploy
 *.zip
 extract_*/
+
+*.rar
+*.csv
