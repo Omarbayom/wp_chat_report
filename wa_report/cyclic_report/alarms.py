@@ -49,6 +49,33 @@ def load_alarms(source) -> pd.DataFrame:
     )
 
 
+def load_log_events(source) -> pd.DataFrame:
+    """Read the Log CSV and keep the **non-alarm** rows as events.
+
+    The device logs mode/settings/service actions in the same ``Alarm`` column
+    (e.g. "Change A/C-VC Mode Setting", "Maintenance Settings Updated", "Alarm
+    Limits Change", "Standby Mode Activated"). Anything **not** in
+    ``ALARM_COLORS`` is treated as an *event*. Returns DataFrame[DateTime, Event].
+    """
+    empty = pd.DataFrame({"DateTime": pd.to_datetime([]), "Event": pd.Series([], dtype="object")})
+    if source is None:
+        return empty
+    df = read_ventilator_csv(source, "Alarm")
+    if "Alarm" not in df.columns or "Date" not in df.columns:
+        return empty
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df = df.dropna(subset=["DateTime"])
+    df = df[~df["Alarm"].isin(ALARM_COLORS)]
+    df = df[df["Alarm"].astype(str).str.strip() != ""]
+    if df.empty:
+        return empty
+    return (
+        df.rename(columns={"Alarm": "Event"})[["DateTime", "Event"]]
+        .sort_values("DateTime")
+        .reset_index(drop=True)
+    )
+
+
 def alarm_types_in(df: pd.DataFrame, start, end) -> List[str]:
     """Alarm types occurring in [start, end), ordered by ALARM_COLORS."""
     if df is None or df.empty:

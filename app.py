@@ -237,25 +237,25 @@ with tab_report:
 # ===================== Tab 2: cyclic ↔ photo timeline ========================
 with tab_cyclic:
     st.caption(
-        "Overlay the times **bursts of photos** were sent in the chat onto the "
-        "ventilator's own **cyclic log**. The log is split into 12-hour windows — "
-        "one graph each — and a red marker is drawn wherever a photo burst falls "
-        "inside the window. Pair a chat with the CSV exported from the **same "
-        "device and dates** so the two line up in time."
+        "Plot the ventilator's **cyclic log** split into windows — one graph each. "
+        "The WhatsApp chat is **optional**: add it to overlay the times **bursts "
+        "of photos** were sent (a red marker wherever a burst falls inside a "
+        "window) — pair it with the CSV from the **same device and dates** so the "
+        "two line up. Without a chat, just the cyclic graphs are drawn."
     )
 
     with st.form("cyclic_form"):
-        cyc_uploaded = st.file_uploader(
-            "WhatsApp export(s) (.zip) — for the photo-send times",
-            type=["zip"],
-            accept_multiple_files=True,
-            key="cyc_zip",
-        )
         cyclic_csv = st.file_uploader(
-            "Cyclic device log (.csv) — must have a 'DateTime' column",
+            "Cyclic device log (.csv) — must have a 'DateTime' column (required)",
             type=["csv"],
             accept_multiple_files=False,
             key="cyc_csv",
+        )
+        cyc_uploaded = st.file_uploader(
+            "WhatsApp export(s) (.zip) — optional; adds the photo-burst markers",
+            type=["zip"],
+            accept_multiple_files=True,
+            key="cyc_zip",
         )
         alarm_csv = st.file_uploader(
             "Alarm log (.csv) — optional; 'Date' + 'Alarm' columns (the Log_*.csv)",
@@ -298,21 +298,22 @@ with tab_cyclic:
         cyc_submitted = st.form_submit_button("Generate timeline", type="primary")
 
     if cyc_submitted:
-        if not cyc_uploaded:
-            st.error("Please upload at least one WhatsApp export ZIP.")
-        elif cyclic_csv is None:
+        if cyclic_csv is None:
             st.error("Please upload the cyclic device log CSV.")
         elif not variables:
             st.error("Please pick at least one variable for the Y axis.")
         else:
             with st.spinner("Building cyclic timeline…"):
                 try:
-                    work_dir = _save_uploads_to_tempdir(
-                        [(f.name, f.getvalue()) for f in cyc_uploaded],
-                        prefix="wa_cyclic_gui_",
-                    )
+                    folders = []
+                    if cyc_uploaded:
+                        work_dir = _save_uploads_to_tempdir(
+                            [(f.name, f.getvalue()) for f in cyc_uploaded],
+                            prefix="wa_cyclic_gui_",
+                        )
+                        folders = [work_dir]
                     report = build_cyclic_report(
-                        [work_dir],
+                        folders,
                         io.BytesIO(cyclic_csv.getvalue()),
                         variables,
                         device_label=device_label.strip(),
@@ -371,26 +372,30 @@ with tab_cyclic:
                     st.image(w.png, caption=cap, use_container_width=True)
 
 
-# ================== Tab 3: two linked interactive pages ======================
+# ================== Tab 3: three linked interactive pages ====================
 with tab_combined:
     st.caption(
-        "Builds **two interactive pages that link to each other**: `report.html` "
-        "(the chat) and `charts.html` (the cyclic charts). On a chart, hover for a "
-        "value table + time crosshair and **click to lock**; click a **photo-burst "
-        "marker** to open the chat at those images. On the chat, the **📈** button "
-        "on any image opens the charts page at that moment (crosshair locked). The "
-        "pages open each other in separate browser tabs — keep both files in the "
-        "**same folder**. Downloaded together as a ZIP."
+        "Builds interactive pages that link to each other: `windows.html` (one "
+        "graph per clock window — hourly by default, re-sliceable to "
+        "1/2/3/6/12/24h) and `charts.html` (the stock-style overview with a "
+        "draggable window + date/time search + Y-axis picker). On any chart, hover "
+        "for a value table + time crosshair and **click to lock**. **The WhatsApp "
+        "chat is optional** — upload it too and you also get `report.html` (the "
+        "chat), plus photo-burst markers on the charts (click one to open the chat "
+        "at those images) and a **📈** button on each chat image that opens the "
+        "stock view at that moment. Without the chat, only the two chart pages are "
+        "produced from the cyclic data. The pages open each other in separate "
+        "browser tabs — keep the files in the **same folder**. Downloaded as a ZIP."
     )
 
     with st.form("combined_form"):
-        cmb_zip = st.file_uploader(
-            "WhatsApp export(s) (.zip)", type=["zip"],
-            accept_multiple_files=True, key="cmb_zip",
-        )
         cmb_csv = st.file_uploader(
-            "Cyclic device log (.csv) — needs a 'DateTime' column",
+            "Cyclic device log (.csv) — needs a 'DateTime' column (required)",
             type=["csv"], accept_multiple_files=False, key="cmb_csv",
+        )
+        cmb_zip = st.file_uploader(
+            "WhatsApp export(s) (.zip) — optional; adds the chat page + photo markers",
+            type=["zip"], accept_multiple_files=True, key="cmb_zip",
         )
         cmb_alarm = st.file_uploader(
             "Alarm log (.csv) — optional; 'Date' + 'Alarm' columns",
@@ -415,29 +420,32 @@ with tab_combined:
             with d2:
                 cmb_gap = st.number_input("Burst gap (min)", 1, 120, 10, key="cmb_gap")
             with d3:
-                cmb_hours = st.number_input("Window (hours)", 1, 48, 12, key="cmb_hours")
+                cmb_hours = st.number_input("Window (hours)", 1, 48, 1, key="cmb_hours")
             with d4:
                 cmb_dim = st.number_input("Max image px", 200, 1600, 480, step=40,
                                           key="cmb_dim")
         cmb_submitted = st.form_submit_button("Build linked pages", type="primary")
 
     if cmb_submitted:
-        if not cmb_zip:
-            st.error("Please upload at least one WhatsApp export ZIP.")
-        elif cmb_csv is None:
+        if cmb_csv is None:
             st.error("Please upload the cyclic device log CSV.")
         elif not cmb_vars:
             st.error("Please pick at least one variable.")
         else:
             pages = None
-            with st.spinner("Building the two linked pages…"):
+            spin_msg = ("Building the three linked pages…" if cmb_zip
+                        else "Building the two chart pages…")
+            with st.spinner(spin_msg):
                 try:
-                    work_dir = _save_uploads_to_tempdir(
-                        [(f.name, f.getvalue()) for f in cmb_zip],
-                        prefix="wa_linked_gui_",
-                    )
-                    chat_html, charts_html = build_linked_pages(
-                        [work_dir],
+                    folders = []
+                    if cmb_zip:
+                        work_dir = _save_uploads_to_tempdir(
+                            [(f.name, f.getvalue()) for f in cmb_zip],
+                            prefix="wa_linked_gui_",
+                        )
+                        folders = [work_dir]
+                    pages = build_linked_pages(
+                        folders,
                         io.BytesIO(cmb_csv.getvalue()),
                         cmb_vars,
                         hospital=cmb_hosp.strip(),
@@ -447,33 +455,37 @@ with tab_combined:
                         min_photos=int(cmb_min),
                         window_minutes=int(cmb_gap),
                         window_hours=int(cmb_hours),
+                        windows_hours=int(cmb_hours),
                         max_img_dim=int(cmb_dim),
                     )
-                    pages = (chat_html, charts_html)
                 except ValueError as exc:
                     st.error(f"Could not build the pages: {exc}")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Unexpected error: {exc}")
 
             if pages:
-                chat_html, charts_html = pages
                 import zipfile
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                    zf.writestr("report.html", chat_html)
-                    zf.writestr("charts.html", charts_html)
-                st.success(
-                    f"Done — report.html ({len(chat_html)//1024} KB) + "
-                    f"charts.html ({len(charts_html)//1024} KB)."
+                    for name, html_str in pages.items():
+                        zf.writestr(name, html_str)
+                sizes = " + ".join(
+                    f"{name} ({len(html_str)//1024} KB)"
+                    for name, html_str in pages.items()
                 )
+                n = len(pages)
+                st.success(f"Done — {n} linked page{'s' if n != 1 else ''}: {sizes}.")
                 st.download_button(
-                    label="Download both pages (.zip)",
+                    label=f"Download {'all ' if n > 1 else ''}{n} page{'s' if n != 1 else ''} (.zip)",
                     data=buf.getvalue(),
                     file_name="linked_report.zip",
                     mime="application/zip",
                 )
+                others = ("windowed and chat pages" if "report.html" in pages
+                          else "windowed page")
                 st.caption(
-                    "Preview of the charts page (its cross-links open the chat page, "
-                    "which only works once both files are extracted together):"
+                    f"Preview of the stock overview page. Its cross-links open the "
+                    f"{others} — those only work once the files are extracted "
+                    "together in one folder."
                 )
-                components.html(charts_html, height=760, scrolling=True)
+                components.html(pages["charts.html"], height=760, scrolling=True)

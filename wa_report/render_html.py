@@ -56,7 +56,8 @@ _AVATAR_COLORS = [
 
 
 def render_html_str(report: Report, cache: media.MediaCache,
-                    chart_href: "str | None" = None, hour24: bool = False) -> str:
+                    chart_href: "str | None" = None, hour24: bool = False,
+                    nav_links: str = "") -> str:
     """Build the interactive chat report and return it as an HTML string.
 
     When *chart_href* is given, each image gets a stable ``img-<ts>`` id (so the
@@ -223,14 +224,17 @@ def render_html_str(report: Report, cache: media.MediaCache,
         stats_imgs=total_imgs,
         stats_json=stats_json,
         sections="\n".join(sections),
+        nav=nav_links,
     )
     return doc
 
 
 def render_html(report: Report, out_path: Path, cache: media.MediaCache,
-                chart_href: "str | None" = None, hour24: bool = False) -> Path:
+                chart_href: "str | None" = None, hour24: bool = False,
+                nav_links: str = "") -> Path:
     """Write the interactive chat report to *out_path* and return it."""
-    doc = render_html_str(report, cache, chart_href=chart_href, hour24=hour24)
+    doc = render_html_str(report, cache, chart_href=chart_href, hour24=hour24,
+                          nav_links=nav_links)
     out_path.write_text(doc, encoding="utf-8")
     return out_path
 
@@ -252,9 +256,14 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   a {{ color:var(--accent); text-decoration:none; }}
   .muted {{ color:var(--muted); }}
 
-  header.top {{ background:var(--accent); color:#fff; padding:16px 22px; }}
+  header.top {{ background:var(--accent); color:#fff; padding:16px 22px;
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap; }}
   header.top h1 {{ margin:0; font-size:20px; font-weight:650; }}
   header.top .sub {{ opacity:.9; font-size:13px; margin-top:2px; }}
+  header.top .topnav {{ margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; }}
+  header.top .nav-btn {{ color:#fff; background:rgba(255,255,255,.18);
+    padding:7px 13px; border-radius:8px; text-decoration:none; font-size:13px; }}
+  header.top .nav-btn:hover {{ background:rgba(255,255,255,.32); }}
 
   .layout {{ display:flex; align-items:flex-start; gap:18px;
     max-width:1180px; margin:0 auto; padding:18px; }}
@@ -351,8 +360,11 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <header class="top">
-  <h1>{hospital}</h1>
-  <div class="sub">Mechanical Ventilation Monitoring Report</div>
+  <div>
+    <h1>{hospital}</h1>
+    <div class="sub">Mechanical Ventilation Monitoring Report</div>
+  </div>
+  <div class="topnav">{nav}</div>
 </header>
 
 <div class="layout">
