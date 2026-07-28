@@ -22,7 +22,10 @@ from .alarms import alarm_types_in, load_alarms
 from .bursts import BulkEvent, detect_bulk_events, image_send_times
 from .config import ALARM_COLORS, DEFAULT_VARIABLES, VARIABLE_UNITS
 from .data_loader import load_cyclic
+from .patient import (build_patient_html, build_patients_html,
+                      load_patient_info, patient_title, with_fallback_id)
 from .plotting import plot_window, window_title
+from .roster import assemble_roster, build_roster
 from .render_combined import build_combined_html
 from .render_html import render_cyclic_html
 from .render_pages import build_charts_html, build_linked_pages
@@ -37,4 +40,6 @@ __all__ = [
     "WindowResult", "CyclicReport", "build_cyclic_report",
     "render_cyclic_html", "build_combined_html",
     "build_charts_html", "build_linked_pages",
+    "load_patient_info", "patient_title", "build_patient_html", "with_fallback_id",
+    "build_patients_html", "build_roster", "assemble_roster",
 ]

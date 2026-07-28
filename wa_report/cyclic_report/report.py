@@ -16,6 +16,7 @@ from .bursts import BulkEvent, detect_bulk_events, image_send_times
 from .config import DEFAULT_VARIABLES
 from .data_loader import load_cyclic
 from .plotting import plot_window, window_title
+from .roster import build_roster
 from .windowing import split_windows
 
 
@@ -39,6 +40,8 @@ class CyclicReport:
     total_images: int
     windows: List[WindowResult]
     total_alarms: int = 0
+    patient: List = field(default_factory=list)   # current patient's (label,value) pairs
+    patients: List = field(default_factory=list)  # full per-patient roster (segments)
 
     @property
     def total_bursts(self) -> int:
@@ -59,6 +62,8 @@ def build_cyclic_report(folders, cyclic_source, variables: Sequence[str],
     times = image_send_times(folders)
     events = detect_bulk_events(times, min_photos=min_photos,
                                 window_minutes=window_minutes)
+    roster = build_roster(cyclic_source, alarms_source)
+    patient = [tuple(x) for x in roster[-1]["info"]] if roster else []
     df, missing = load_cyclic(cyclic_source, variables)
     alarms = load_alarms(alarms_source)
 
@@ -72,7 +77,7 @@ def build_cyclic_report(folders, cyclic_source, variables: Sequence[str],
                                      png, win_events, counts))
 
     return CyclicReport(
-        device_label=device_label or "Cyclic device log",
+        device_label=device_label or (roster[-1]["label"] if roster else "") or "Cyclic device log",
         variables=[v for v in variables if v not in missing],
         missing_vars=missing,
         data_start=df["DateTime"].min().to_pydatetime(),
@@ -80,4 +85,6 @@ def build_cyclic_report(folders, cyclic_source, variables: Sequence[str],
         total_images=len(times),
         windows=windows,
         total_alarms=int(len(alarms)),
+        patient=patient,
+        patients=roster,
     )

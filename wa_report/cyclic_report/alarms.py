@@ -76,10 +76,28 @@ def load_log_events(source) -> pd.DataFrame:
     )
 
 
+def load_patient_add_events(source) -> List["pd.Timestamp"]:
+    """Times of the device's **"Add New Patient"** log rows — each marks a patient
+    handover, so they split a reused device's log into per-patient segments.
+
+    Returns a sorted list of timestamps (empty when the source is falsy or has no
+    such rows). Matched case-insensitively on the trimmed ``Alarm`` text.
+    """
+    if source is None:
+        return []
+    df = read_ventilator_csv(source, "Alarm")
+    if "Alarm" not in df.columns or "Date" not in df.columns:
+        return []
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df = df.dropna(subset=["DateTime"])
+    mask = df["Alarm"].astype(str).str.strip().str.lower() == "add new patient"
+    return sorted(df.loc[mask, "DateTime"].tolist())
+
+
 def alarm_types_in(df: pd.DataFrame, start, end) -> List[str]:
     """Alarm types occurring in [start, end), ordered by ALARM_COLORS."""
     if df is None or df.empty:
         return []
     win = df[(df["DateTime"] >= start) & (df["DateTime"] < end)]
-    present = set(win["Alarm"])
-    return [a for a in ALARM_COLORS if a in present]
+    present = set(win["Alarm"].astype(str).str.strip().str.lower())
+    return [a for a in ALARM_COLORS if str(a).lower() in present]

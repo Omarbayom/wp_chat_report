@@ -12,6 +12,7 @@ import html
 from pathlib import Path
 from typing import Optional
 
+from .patient import banner_html
 from .report import CyclicReport
 
 
@@ -65,8 +66,15 @@ def render_cyclic_html(report: CyclicReport, out_path: Optional[Path] = None) ->
             "dates to see markers.</p>"
         )
 
+    _roster = getattr(report, "patients", []) or []
+    _multi = len(_roster) > 1
+    _note = (f"1 of {len(_roster)} patients on this device — this report covers the "
+             "whole log" if _multi else "")
     doc = _CYCLIC_TEMPLATE.format(
         device=_esc(report.device_label),
+        patient=banner_html(getattr(report, "patient", []), link_href=None,
+                            margin="0 0 14px", note=_note,
+                            color=(_roster[-1].get("color", "") if _multi else "")),
         vars=_esc(", ".join(report.variables)),
         span=f"{report.data_start.strftime('%d/%m/%Y %H:%M')} → "
              f"{report.data_end.strftime('%d/%m/%Y %H:%M')}",
@@ -125,6 +133,7 @@ _CYCLIC_TEMPLATE = """<!DOCTYPE html>
   <div class="sub">Cyclic ventilator log ⟷ WhatsApp photo timeline · Y-axis: {vars}</div>
 </header>
 <main>
+  {patient}
   <div class="stats">
     <div class="stat"><b>{n_windows}</b><span>12-hour graphs</span></div>
     <div class="stat"><b>{n_bursts}</b><span>Photo bursts mapped</span></div>

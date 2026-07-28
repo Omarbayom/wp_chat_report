@@ -29,8 +29,10 @@ from .. import media
 from ..render_html import render_html_str
 from ..report import build_report
 from .config import DEFAULT_VARIABLES
+from .patient import build_patients_html
 from .render_combined import _esc, _ms, build_payload
 from .render_windows import build_windows_html
+from .roster import build_roster
 
 
 def _span(a, b) -> str:
@@ -50,7 +52,7 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
                       chat_href: str = "report.html",
                       windows_href: str = "windows.html", min_photos: int = 3,
                       window_minutes: int = 10, window_hours: int = 12,
-                      out_path: Optional[Path] = None) -> str:
+                      patient_href: str = "", out_path: Optional[Path] = None) -> str:
     """Interactive charts page. The whole cyclic log is embedded and shown; the
     user drags a window over a compressed overview (or types a start/end time, or
     steps through alarms) to zoom the detail chart, and picks any variables on the
@@ -62,6 +64,10 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
                                   min_photos=min_photos,
                                   window_minutes=window_minutes)
     payload["initialHours"] = window_hours if window_hours > 0 else 12
+    # The patient banner is rendered client-side from payload["patients"] so it
+    # follows the current view (which patient's segment you're looking at).
+    patients = meta.get("patients", [])
+    device_label = device_label or (patients[-1]["label"] if patients else "")
 
     notes = ""
     if meta["n_bursts_dropped"]:
@@ -105,6 +111,7 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
            .replace("__NMODE__", str(meta["n_modes"]))
            .replace("__NEVENT__", str(meta["n_events"]))
            .replace("__NOTES__", notes)
+           .replace("__PATIENTHREF__", _esc(patient_href))
            .replace("/*__DATA__*/", json.dumps(payload)))
     if out_path is not None:
         Path(out_path).write_text(doc, encoding="utf-8")
@@ -138,6 +145,12 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
     has_chat = bool(folders)
     chat_href = "report.html" if has_chat else ""
 
+    # Per-patient roster from the cyclic CSV + log ("Add New Patient" handovers).
+    # Drives the Patients page, the banners, and a blank report title. The current
+    # (last) patient supplies the label; earlier patients are b1/b2/…
+    roster = build_roster(cyclic_source, alarms_source)
+    device_label = device_label or (roster[-1]["label"] if roster else "")
+
     result = {}
     if has_chat:
         report = build_report(folders, hospital or "—", device_label or "—",
@@ -153,22 +166,37 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
             '<a class="nav-btn" href="windows.html" target="wa_windows">📊 Windowed view</a>'
             '<a class="nav-btn" href="charts.html" target="wa_charts">📈 Stock view</a>'
         )
+        if roster:
+            label = "Patients" if len(roster) > 1 else "Patient"
+            nav_links += f'<a class="nav-btn" href="patient.html" target="wa_patient">👤 {label}</a>'
         result["report.html"] = render_html_str(
             report, cache, chart_href="charts.html", hour24=True,
             nav_links=nav_links)
 
+    patient_href = "patient.html" if roster else ""
     result["windows.html"] = build_windows_html(
         folders, cyclic_source, variables, device_label=device_label,
         alarms_source=alarms_source, chat_href=chat_href,
         stock_href="charts.html", min_photos=min_photos,
         window_minutes=window_minutes, window_hours=windows_hours,
+        patient_href=patient_href,
     )
     result["charts.html"] = build_charts_html(
         folders, cyclic_source, variables, device_label=device_label,
         alarms_source=alarms_source, chat_href=chat_href,
         windows_href="windows.html", min_photos=min_photos,
         window_minutes=window_minutes, window_hours=window_hours,
+        patient_href=patient_href,
     )
+    # Dedicated, cross-linked Patients page (one card per patient on the device).
+    if roster:
+        links = {}
+        if has_chat:
+            links["Chat"] = ("report.html", "wa_report")
+        links["Windowed view"] = ("windows.html", "wa_windows")
+        links["Stock view"] = ("charts.html", "wa_charts")
+        result["patient.html"] = build_patients_html(
+            roster, device_label=device_label, links=links, chart_href="charts.html")
     return result
 
 
@@ -197,6 +225,8 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
     background:#fff; border:1px solid #e3e8ee; border-radius:10px; padding:10px 14px; margin:12px 20px 0; }
   .controls .fld, .controls label.q { display:flex; flex-direction:column; gap:3px; font-size:11px; color:#5b6b7b; }
   .controls input[type="datetime-local"] { font:inherit; font-size:13px; padding:5px 8px; border:1px solid #cfd8e3; border-radius:6px; color:#1d2733; }
+  .controls input[type="number"] { font:inherit; font-size:13px; padding:5px 8px; border:1px solid #cfd8e3; border-radius:6px; color:#1d2733; width:72px; }
+  .controls .wrow { display:flex; gap:4px; align-items:center; }
   .controls select, .controls button { font:inherit; font-size:13px; padding:6px 10px; border-radius:6px; border:1px solid #cfd8e3; background:#fff; cursor:pointer; }
   .controls button.primary { background:#0a6ebd; color:#fff; border-color:#0a6ebd; }
   .controls button:hover { border-color:#0a6ebd; }
@@ -217,16 +247,45 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .lock-badge { font-size:11px; color:#c0392b; margin-left:8px; font-weight:600; }
   .alarm-only { font-size:11px; color:#8a5b00; margin-left:8px; font-weight:600; }
   .chart-row { display:flex; gap:10px; align-items:flex-start; }
-  svg.chart { flex:1 1 auto; width:100%; height:auto; cursor:crosshair; }
+  svg.chart { flex:1 1 auto; width:100%; height:auto; cursor:crosshair; user-select:none; }
   .readout { flex:0 0 160px; font-size:12px; }
   .readout table { border-collapse:collapse; width:100%; }
   .readout td { border-bottom:1px solid #eef2f6; padding:2px 4px; }
   .readout td.k { color:#5b6b7b; } .readout td.v { text-align:right; font-weight:600; }
   .readout td.al { text-align:left; font-weight:600; font-size:11px; line-height:1.35; }
   .readout .hint { color:#5b6b7b; font-style:italic; margin-top:6px; font-size:11px; }
+  /* focus mode (double-click a panel) */
+  .focus-note { font-size:12px; color:#0a6ebd; background:#eaf4fc; border:1px solid #bcdcf5;
+    border-radius:20px; padding:3px 10px; margin-left:auto; }
+  .focus-note button { font:inherit; font-size:11.5px; margin-left:6px; padding:1px 8px;
+    border-radius:12px; border:1px solid #0a6ebd; background:#fff; color:#0a6ebd; cursor:pointer; }
+  /* event / mode titles under the time axis — selectable text, clickable chips */
+  .ledger { margin-top:8px; border-top:1px solid #eef2f6; padding-top:6px; }
+  .ledger-h { font-size:11.5px; color:#5b6b7b; margin:0 0 4px; }
+  .ledger-h b { color:#1d2733; }
+  .ledger .chips { display:flex; flex-wrap:wrap; gap:5px; max-height:150px; overflow:auto;
+    user-select:text; -webkit-user-select:text; }
+  .chip { font-size:11.5px; border-radius:14px; padding:2px 9px; cursor:pointer;
+    user-select:text; -webkit-user-select:text; background:#e9f7f7; border:1px solid #b6e4e4; color:#14555a; }
+  .chip b { font-variant-numeric:tabular-nums; color:#0aa3a3; margin-right:5px; font-weight:700; }
+  .chip:hover { border-color:#0aa3a3; }
+  .chip.sel { background:#0aa3a3; border-color:#0aa3a3; color:#fff; } .chip.sel b { color:#fff; }
+  .chip.mode { background:#f3eefc; border-color:#dccdf5; color:#452a75; }
+  .chip.mode b { color:#6f42c1; }
+  .chip.mode.sel { background:#6f42c1; border-color:#6f42c1; color:#fff; }
+  /* per-window statistics */
+  .statbox { margin-top:8px; border-top:1px solid #eef2f6; padding-top:6px; }
+  .statbox summary { cursor:pointer; font-size:12px; font-weight:600; color:#0a6ebd; }
+  table.st { border-collapse:collapse; margin-top:6px; font-size:11.5px; }
+  table.st th, table.st td { border:1px solid #eef2f6; padding:2px 9px; text-align:right;
+    font-variant-numeric:tabular-nums; }
+  table.st th { background:#f7f9fc; color:#5b6b7b; font-weight:600; }
+  table.st td.n, table.st th.n { text-align:left; font-weight:600; color:#1d2733; }
+  table.st .u { color:#5b6b7b; font-weight:400; font-size:10.5px; }
+  .stat-foot { font-size:11px; color:#5b6b7b; margin-top:5px; }
   @media (max-width:720px){ .chart-row{ flex-direction:column; } .readout{ flex-basis:auto; width:100%; } }
 </style></head><body>
-<header><h1>__DEVICE__</h1><div class="sub">set a range to zoom · drag the window inside · hover to read · click to lock</div>
+<header><h1>__DEVICE__</h1><div class="sub">set a range to zoom · drag the window inside · hover to read · click to lock · double-click a graph to focus it</div>
   <div class="ctl">
     <a class="other" href="__WINDOWSHREF__" target="wa_windows">Windowed view ↗</a>
     __CHATLINK__
@@ -238,11 +297,13 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   <div class="stat"><b>__NALARM__</b> <span>alarms</span></div>
   <div class="stat"><b>__NBURST__</b> <span>photo bursts</span></div>
 </div>
+<div id="patient-banner"></div>
 __NOTES__
 
 <div class="varbar">
   <span class="lbl">Y axis:</span>
   __VAROPTS__
+  <span class="focus-note" id="focus-note" hidden></span>
 </div>
 
 <div class="controls">
@@ -265,6 +326,17 @@ __NOTES__
       <option value="0">Whole range</option>
     </select>
   </label>
+  <label class="q">Custom width
+    <span class="wrow">
+      <input type="number" id="q-width-n" min="1" step="1" placeholder="e.g. 90">
+      <select id="q-width-u">
+        <option value="min">min</option>
+        <option value="hour" selected>hours</option>
+        <option value="day">days</option>
+      </select>
+      <button type="button" id="q-width-apply">Set</button>
+    </span>
+  </label>
   <button id="al-prev" title="Move the window to the previous alarm">◀ Alarm</button>
   <button id="al-next" title="Move the window to the next alarm">Alarm ▶</button>
   <div class="span" id="span-lbl">—</div>
@@ -274,6 +346,7 @@ __NOTES__
   <div class="ov-h" id="ov-h">Overview — set a range to zoom, then drag the window inside it</div>
   <div style="font-size:12px;color:#5b6b7b;margin:0 0 4px">Trend variable:
     <select id="ov-var" onchange="setOvVar(this.value)">__OVVAROPTS__</select></div>
+  <div id="patient-legend" style="font-size:11.5px;color:#5b6b7b;margin:2px 0 4px"></div>
   <svg class="ov" id="overview"></svg>
 </div>
 
@@ -293,8 +366,60 @@ const MODE_COLOR = '#6f42c1', EVENT_COLOR = '#0aa3a3';                 // modes 
 const HOUR = 3600000;
 function modeAt(t){ let m=null; for(const md of DATA.modes){ if(md[0]<=t) m=md[1]; else break; } return m; }
 function setOvVar(v){ OVVAR=v; buildOverview(); }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// --- patient banner: follows the view (which patient's segment you're on) ---
+const PATIENT_HREF = "__PATIENTHREF__";
+const PATIENTS = DATA.patients || [];
+const DEFAULT_TREND = '#0a6ebd';
+function segAt(t){ for(const s of PATIENTS){ if(t>=s.t0 && t<=s.t1) return s; }
+  return PATIENTS.length ? PATIENTS[PATIENTS.length-1] : null; }
+// trend colour at time t: the patient segment's colour (falls back to blue)
+function colorAt(t){ for(const s of PATIENTS){ if(t>=s.t0 && t<=s.t1) return s.color||DEFAULT_TREND; } return DEFAULT_TREND; }
+function dot(c){ return `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;`
+  +`background:${c};margin-right:2px;vertical-align:-1px"></span>`; }
+function patientBannerHTML(seg, note){
+  const info = (seg && seg.info) ? seg.info : [];
+  if(!info.length) return '';
+  const items = info.map(kv=>`<span style="white-space:nowrap"><span style="color:#5b6b7b">`
+    +`${esc(kv[0].replace('Patient ',''))}</span> <b style="color:#1d2733">${esc(kv[1])}</b></span>`).join('');
+  const noteHtml = note ? `<span style="color:#8a5b00;background:#fff6e5;border:1px solid #ffe2a8;`
+    +`border-radius:12px;padding:1px 9px">${esc(note)}</span>` : '';
+  const link = PATIENT_HREF ? `<a href="${esc(PATIENT_HREF)}" target="wa_patient" `
+    +`style="margin-left:auto;color:#0a6ebd;text-decoration:none;font-weight:600">All patients ↗</a>` : '';
+  const swatch = (seg && seg.color && PATIENTS.length>1) ? dot(seg.color) : '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;background:#eef6fd;`
+    +`border:1px solid #cfe4f7;border-radius:10px;padding:8px 14px;margin:12px 20px 0;font-size:13px">`
+    +`<span style="font-weight:700;color:#0a6ebd;letter-spacing:.03em">${swatch}PATIENT</span>${items}${noteHtml}${link}</div>`;
+}
+// patient colour legend under the overview (only when >1 patient)
+function renderPatientLegend(){
+  const host=document.getElementById('patient-legend'); if(!host) return;
+  if(PATIENTS.length<2){ host.innerHTML=''; return; }
+  host.innerHTML = 'Patients: ' + PATIENTS.map(s=>
+    `<span style="margin-right:10px;white-space:nowrap">${dot(s.color)}${esc(s.label)}</span>`).join('');
+}
+function updatePatientBanner(){
+  const host=document.getElementById('patient-banner'); if(!host) return;
+  if(!PATIENTS.length){ host.innerHTML=''; return; }
+  const seg = segAt((SEL.t0+SEL.t1)/2);
+  const n = PATIENTS.length;
+  const note = n>1 ? `patient ${(seg? seg.index : n-1)+1} of ${n}` : '';
+  host.innerHTML = patientBannerHTML(seg, note);
+}
 // --- detail chart geometry ---
 const VB_W = 1000, ML = 70, MR = 16, TOP = 8, PANEL_H = 78, PANEL_GAP = 6, XAXIS_H = 26, LANE_ROW = 14;
+// focus mode: double-clicking a variable panel blows it up and shrinks the rest
+const FOCUS_H = 260, MINI_H = 26;
+let FOCUS = null;                                        // focused variable, or null
+function panelHeights(){ return VARS.map(v => !FOCUS ? PANEL_H : (v===FOCUS ? FOCUS_H : MINI_H)); }
+function gridVals(mn, mx, h){ const n = h>=150 ? 4 : (h>=44 ? 2 : 1); const out=[];
+  for(let i=0;i<=n;i++) out.push(mn+(mx-mn)*i/n); return out; }
+function setFocus(v){ FOCUS = (v && v!==FOCUS) ? v : null; updateFocusNote(); renderDetail(); }
+function updateFocusNote(){ const n=document.getElementById('focus-note'); if(!n) return;
+  n.hidden = !FOCUS;
+  if(FOCUS) n.innerHTML = `focused on <b>${esc(FOCUS)}</b> — the other graphs are shrunk`
+    + `<button type="button" onclick="setFocus(null)">show all</button>`; }
 // --- overview geometry ---
 const OV_L = 70, OV_R = VB_W - 16, OV_TOP = 10, OV_CH = 66, OV_GAP = 6, OV_LANE = 9;
 
@@ -331,6 +456,7 @@ function onVarToggle(){
   const sel=boxes.filter(b=>b.checked).map(b=>b.value);
   if(!sel.length){ return; }                        // keep at least one variable
   VARS = ALLVARS.filter(v=>sel.includes(v));         // stable config order
+  if(FOCUS && !VARS.includes(FOCUS)){ FOCUS=null; updateFocusNote(); }
   buildOverview(); renderDetail();
 }
 
@@ -357,14 +483,17 @@ function buildOverview(){
   const yOf = v => yBot - (v-gmn)/(gmx-gmn)*(yBot-yTop);
   let p=[];
   p.push(`<rect x="${OV_L}" y="${yTop}" width="${OV_R-OV_L}" height="${OV_CH}" fill="#fbfdff" stroke="#e3e8ee"/>`);
-  // the trend line ("diagram") of the chosen variable over the region
-  let d='', pen=false;
+  // the trend line ("diagram") of the chosen variable over the region, drawn in
+  // each patient's own colour (a break at every "Add New Patient" handover)
+  let d='', pen=false, col=null;
+  const flush=()=>{ if(d) p.push(`<path d="${d}" fill="none" stroke="${col||'#0a6ebd'}" stroke-width="1.2"/>`); d=''; pen=false; };
   for(let i=lowerBound(REGION.r0);i<DATA.samples.length && DATA.samples[i][0]<=REGION.r1;i++){
     const s=DATA.samples[i]; const y=s[pc];
-    if(y==null){ pen=false; continue; }
+    if(y==null){ flush(); continue; }
+    const c=colorAt(s[0]); if(c!==col){ flush(); col=c; }
     const x=ovX(s[0]), yy=yOf(y); d += (pen?'L':'M')+x.toFixed(1)+' '+yy.toFixed(1)+' '; pen=true;
   }
-  p.push(`<path d="${d}" fill="none" stroke="#0a6ebd" stroke-width="1.2"/>`);
+  flush();
   p.push(`<text x="${OV_L+4}" y="${yTop+11}" font-size="10" font-weight="bold" fill="#1d2733">${pv} (${UNITS[pv]||''}) — trend</text>`);
   p.push(`<text x="${OV_L-5}" y="${yTop+9}" text-anchor="end" font-size="8" fill="#5b6b7b">${gmx.toFixed(0)}</text>`);
   p.push(`<text x="${OV_L-5}" y="${yBot}" text-anchor="end" font-size="8" fill="#5b6b7b">${gmn.toFixed(0)}</text>`);
@@ -438,13 +567,23 @@ function setSel(t0, t1, skipDetail){
   updateBrushRects();
   const lbl=document.getElementById('span-lbl');
   lbl.innerHTML = `window <b>${fmtDateTime(t0)}</b> → <b>${fmtDateTime(t1)}</b> · ${fmtDur(t1-t0)}`;
+  updatePatientBanner();
   if(!skipDetail) renderDetail();
+}
+function unitMs(u){ return u==='min' ? 60000 : (u==='day' ? 86400000 : HOUR); }
+function setWidthMs(w){                        // centre a window of width w on the current centre
+  w=Math.min(Math.max(MINW, w), regSpan()); const c=(SEL.t0+SEL.t1)/2;
+  let a=Math.max(REGION.r0, c-w/2); let b=a+w; if(b>REGION.r1){ b=REGION.r1; a=Math.max(REGION.r0, b-w); }
+  setSel(a, b);
 }
 function setWidthHours(h){
   if(h===0){ setSel(REGION.r0, REGION.r1); return; }
-  const w=Math.min(h*HOUR, regSpan()); const c=(SEL.t0+SEL.t1)/2;
-  let a=Math.max(REGION.r0, c-w/2); let b=a+w; if(b>REGION.r1){ b=REGION.r1; a=Math.max(REGION.r0, b-w); }
-  setSel(a, b);
+  setWidthMs(h*HOUR);
+}
+function applyCustomWidth(){                    // any window size the user types (min / hours / days)
+  const n=parseFloat(document.getElementById('q-width-n').value);
+  if(!isFinite(n) || n<=0){ alert('Enter a positive window width.'); return; }
+  setWidthMs(n*unitMs(document.getElementById('q-width-u').value));
 }
 function gotoAlarm(dir){
   if(!DATA.alarms.length) return;
@@ -486,6 +625,8 @@ document.getElementById('q-apply').addEventListener('click', ()=>{
   applyRegion(a, b);
 });
 document.getElementById('q-reset').addEventListener('click', resetRegion);
+document.getElementById('q-width-apply').addEventListener('click', applyCustomWidth);
+document.getElementById('q-width-n').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyCustomWidth(); } });
 document.getElementById('al-prev').addEventListener('click', ()=>gotoAlarm(-1));
 document.getElementById('al-next').addEventListener('click', ()=>gotoAlarm(1));
 
@@ -513,9 +654,13 @@ function renderDetail(){
     : `<span class="alarm-only">alarms only — no cyclic data</span>`;
   host.innerHTML = `<div class="card" id="card-d"><div class="card-h">${title}${badge}</div>`
     + `<div class="chart-row"><svg class="chart" id="chart-d"></svg>`
-    + `<div class="readout" id="readout-d"></div></div></div>`;
+    + `<div class="readout" id="readout-d"></div></div>`
+    + `<div class="ledger" id="ledger-d"></div>`
+    + `<details class="statbox" id="stats-d" open></details></div>`;
   CTRL.locked=false;
   buildChart(win);
+  buildLedger(win);
+  buildStats(win);
 }
 function buildChart(win){
   const svg = document.getElementById('chart-d');
@@ -523,7 +668,8 @@ function buildChart(win){
         .sort((a,b)=>Object.keys(DATA.alarmColors).indexOf(a)-Object.keys(DATA.alarmColors).indexOf(b));
   const laneH = alarmTypes.length ? alarmTypes.length*LANE_ROW + 8 : 0;
   const nV = VARS.length;
-  const H = TOP + laneH + nV*(PANEL_H+PANEL_GAP) + XAXIS_H;
+  const PH = panelHeights();                    // focused panel tall, the rest shrunk
+  const H = TOP + laneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + XAXIS_H;
   svg.setAttribute('viewBox', `0 0 ${VB_W} ${H}`);
   const plotL = ML, plotR = VB_W - MR;
   const dur = Math.max(1, win.t1-win.t0);
@@ -532,9 +678,11 @@ function buildChart(win){
     for(const s of win.samples){ const y=s[c]; if(y==null) continue; if(y<mn)mn=y; if(y>mx)mx=y; }
     if(mn===Infinity){ mn=0; mx=1; } if(mn===mx){ mn-=1; mx+=1; }
     const pad=(mx-mn)*0.08; return [mn-pad, mx+pad]; });
-  const panelTop = k => TOP + laneH + k*(PANEL_H+PANEL_GAP);
-  const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PANEL_H; };
-  const panelsBottom = panelTop(nV-1) + PANEL_H;
+  const tops = []; { let y = TOP + laneH;
+    for(let k=0;k<nV;k++){ tops.push(y); y += PH[k] + PANEL_GAP; } }
+  const panelTop = k => tops[k];
+  const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PH[k]; };
+  const panelsBottom = panelTop(nV-1) + PH[nV-1];
   let parts = [];
   if(alarmTypes.length){ alarmTypes.forEach((a,r)=>{ const y = TOP + r*LANE_ROW + LANE_ROW/2;
     const col = DATA.alarmColors[a] || '#888';
@@ -542,15 +690,21 @@ function buildChart(win){
     for(const ev of win.alarms){ if(ev[1]!==a) continue;
       parts.push(`<rect x="${xOf(ev[0])-1.5}" y="${y-3}" width="3" height="6" fill="${col}"/>`); } }); }
   VARS.forEach((v,k)=>{ const c=COL[v], top=panelTop(k), [mn,mx]=ranges[k];
-    parts.push(`<rect x="${plotL}" y="${top}" width="${plotR-plotL}" height="${PANEL_H}" fill="none" stroke="#e3e8ee"/>`);
-    [mn,(mn+mx)/2,mx].forEach(val=>{ const y=yOf(k,val);
+    parts.push(`<rect x="${plotL}" y="${top}" width="${plotR-plotL}" height="${PH[k]}" fill="${FOCUS===v?'#f7fbff':'none'}" stroke="${FOCUS===v?'#bcdcf5':'#e3e8ee'}"/>`);
+    gridVals(mn, mx, PH[k]).forEach(val=>{ const y=yOf(k,val);
       parts.push(`<line x1="${plotL}" y1="${y}" x2="${plotR}" y2="${y}" stroke="#eef2f6"/>`);
-      parts.push(`<text x="${plotL-5}" y="${y+3}" text-anchor="end" font-size="8" fill="#5b6b7b">${val.toFixed(0)}</text>`); });
+      parts.push(`<text x="${plotL-5}" y="${y+3}" text-anchor="end" font-size="8" fill="#5b6b7b">${val.toFixed(PH[k]>=150?1:0)}</text>`); });
     parts.push(`<text x="${plotL+4}" y="${top+11}" font-size="10" font-weight="bold" fill="#1d2733">${v} (${UNITS[v]||''})</text>`);
-    let d='', pen=false;
-    for(const s of win.samples){ const val=s[c]; if(val==null){ pen=false; continue; }
+    // double-click target: focuses this panel (and shrinks the others)
+    parts.push(`<rect class="panel-hit" data-v="${esc(v)}" x="${plotL}" y="${top}" width="${plotR-plotL}"`
+      + ` height="${PH[k]}" fill="transparent" style="cursor:${FOCUS===v?'zoom-out':'zoom-in'}">`
+      + `<title>${esc(v)} — double-click to ${FOCUS===v?'show all graphs again':'focus this graph'}</title></rect>`);
+    let d='', pen=false, col=null; const sw=(FOCUS===v?1.8:1.4);
+    const flush=()=>{ if(d) parts.push(`<path d="${d}" fill="none" stroke="${col||'#0a6ebd'}" stroke-width="${sw}"/>`); d=''; pen=false; };
+    for(const s of win.samples){ const val=s[c]; if(val==null){ flush(); continue; }
+      const cc=colorAt(s[0]); if(cc!==col){ flush(); col=cc; }
       const x=xOf(s[0]), y=yOf(k,val); d += (pen?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' '; pen=true; }
-    parts.push(`<path d="${d}" fill="none" stroke="#0a6ebd" stroke-width="1.4"/>`);
+    flush();
     parts.push(`<line class="hg" id="hg-d-${k}" x1="${plotL}" x2="${plotR}" y1="0" y2="0" stroke="#c0392b" stroke-width="0.8" stroke-dasharray="4 3" visibility="hidden"/>`);
     parts.push(`<circle class="dot" id="dot-d-${k}" r="3" fill="#c0392b" visibility="hidden"/>`); });
   const nTicks=6;
@@ -564,11 +718,14 @@ function buildChart(win){
   // mode changes: purple dashed line at each change; label only where there's room
   let lastMX=-1e9;
   for(const m of win.modes){ const x=xOf(m[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${m[1]} at ${fmtTime(m[0])}</title></line>`);
-    if(x-lastMX>46){ parts.push(`<text x="${x+2}" y="${panelsBottom-2}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${m[1]}</text>`); lastMX=x; } }
-  // settings/data-change events: small teal ticks along the top
+    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${esc(m[1])} at ${fmtTime(m[0])}</title></line>`);
+    if(x-lastMX>46){ parts.push(`<text x="${x+2}" y="${panelsBottom-2}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${esc(m[1])}</text>`); lastMX=x; } }
+  // settings/data-change events: teal ticks along the top, plus a tick just under
+  // the time axis that lines up with the titles listed below the chart
   for(const e of win.events){ const x=xOf(e[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${e[1]} at ${fmtTime(e[0])}</title></line>`); }
+    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`);
+    parts.push(`<line x1="${x}" y1="${panelsBottom+18}" x2="${x}" y2="${panelsBottom+25}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`); }
+  parts.push(`<line id="ev-pick-d" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom+25}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
   parts.push(`<line class="cx" id="cx-d" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
   svg.innerHTML = parts.join('');
   const ro = document.getElementById('readout-d');
@@ -577,17 +734,89 @@ function buildChart(win){
   rows += `<tr><td class="k">Mode</td><td class="v" id="ro-d-mode">—</td></tr>`;
   rows += `<tr><td class="k">Alarms</td><td class="v al" id="ro-d-al">—</td></tr>`;
   rows += `<tr><td class="k">Events</td><td class="v al" id="ro-d-ev">—</td></tr>`;
-  rows += `</table><div class="hint" id="hint-d">hover to read · click to lock</div>`;
+  rows += `</table><div class="hint" id="hint-d">hover to read · click to lock · double-click a graph to focus</div>`;
   ro.innerHTML = rows;
-  CTRL.win=win; CTRL.svg=svg; CTRL.xOf=xOf; CTRL.yOf=yOf;
+  CTRL.win=win; CTRL.svg=svg; CTRL.xOf=xOf; CTRL.yOf=yOf; CTRL.H=H;
+  CTRL.bands=VARS.map((v,k)=>[panelTop(k), panelTop(k)+PH[k], v]);
   svg.addEventListener('mousemove', e=>{ if(CTRL.locked) return; updateAt(xToTime(e)); });
   svg.addEventListener('mouseleave', ()=>{ if(!CTRL.locked) hideCursor(); });
   svg.addEventListener('click', e=>{
     if(e.target.classList.contains('burst-hit')){ const cid=e.target.getAttribute('data-cid'); if(cid) jumpToChat(cid); return; }
     CTRL.locked=!CTRL.locked;
     const lb=document.getElementById('lock-d'); if(lb) lb.hidden = !CTRL.locked;
-    document.getElementById('hint-d').textContent = CTRL.locked ? 'locked · click to unlock' : 'hover to read · click to lock';
+    document.getElementById('hint-d').textContent = CTRL.locked ? 'locked · click to unlock' : 'hover to read · click to lock · double-click a graph to focus';
     if(CTRL.locked) updateAt(xToTime(e)); });
+  svg.addEventListener('dblclick', e=>{ const v=varAtEvent(e); if(v) setFocus(v); });
+}
+// which variable panel is under the pointer: normally the panel's own hit rect
+// is the target; when the double-click lands on something drawn over it (the
+// trace, a marker line, a burst hit-box) fall back to the Y band it sits in.
+function varAtEvent(e){
+  const hit = e.target && e.target.closest ? e.target.closest('.panel-hit') : null;
+  if(hit) return hit.getAttribute('data-v');
+  if(!CTRL.svg || !CTRL.bands) return null;
+  const r=CTRL.svg.getBoundingClientRect(); if(!r.height) return null;
+  const y=(e.clientY-r.top)/r.height*CTRL.H;
+  for(const b of CTRL.bands){ if(y>=b[0]-PANEL_GAP/2 && y<=b[1]+PANEL_GAP/2) return b[2]; }
+  return null; }
+
+// ============ event / mode titles under the time axis (selectable + clickable) ============
+function chipHTML(t, txt, cls){
+  return `<span class="chip ${cls}" data-t="${t}" onclick="pickEvent(this)"`
+    + ` title="${esc(txt)} at ${fmtDateTime(t)} — click to put the cursor here">`
+    + `<b>${fmtTime(t)}</b>${esc(txt)}</span>`;
+}
+function buildLedger(win){
+  const host=document.getElementById('ledger-d'); if(!host) return;
+  let h = `<div class="ledger-h">Events in this window — <b>${win.events.length}</b>`
+    + ` · click a title to put the cursor at that moment · the text is selectable</div>`;
+  h += `<div class="chips">` + (win.events.length
+      ? win.events.map(e=>chipHTML(e[0], e[1], 'ev')).join('')
+      : `<span class="muted">no logged events in this window</span>`) + `</div>`;
+  if(win.modes.length){
+    h += `<div class="ledger-h" style="margin-top:7px">Mode changes — <b>${win.modes.length}</b></div>`
+      + `<div class="chips">` + win.modes.map(m=>chipHTML(m[0], m[1], 'mode')).join('') + `</div>`;
+  }
+  host.innerHTML = h;
+}
+function pickEvent(el){
+  document.querySelectorAll('#ledger-d .chip.sel').forEach(c=>c.classList.remove('sel'));
+  el.classList.add('sel');
+  const t=+el.dataset.t;
+  const pk=document.getElementById('ev-pick-d');
+  if(pk && CTRL.xOf){ const x=CTRL.xOf(t);
+    pk.setAttribute('x1',x); pk.setAttribute('x2',x); pk.setAttribute('visibility','visible'); }
+  lockAt(t, true);
+}
+
+// ============================ window statistics ============================
+function fmtNum(x){ if(x==null || !isFinite(x)) return '—';
+  const s = Math.abs(x)>=10 ? x.toFixed(1) : x.toFixed(2);
+  return s.replace(/\.0+$/,'').replace(/(\.\d*[1-9])0+$/,'$1'); }
+function statsFor(win){
+  return VARS.map(v=>{ const c=COL[v]; let mn=Infinity, mx=-Infinity, sum=0, n=0;
+    for(const s of win.samples){ const y=s[c]; if(y==null) continue;
+      if(y<mn)mn=y; if(y>mx)mx=y; sum+=y; n++; }
+    return n ? {v,n,mn,mx,avg:sum/n} : {v,n:0,mn:null,mx:null,avg:null}; });
+}
+function statsTableHTML(win){
+  let h = `<table class="st"><tr><th class="n">Variable</th><th>Min</th><th>Max</th>`
+    + `<th>Average</th><th>Samples</th></tr>`;
+  for(const r of statsFor(win)){
+    h += `<tr><td class="n">${esc(r.v)} <span class="u">${esc(UNITS[r.v]||'')}</span></td>`
+      + `<td>${fmtNum(r.mn)}</td><td>${fmtNum(r.mx)}</td><td>${fmtNum(r.avg)}</td>`
+      + `<td>${r.n}</td></tr>`;
+  }
+  h += `</table><div class="stat-foot">${fmtDateTime(win.t0)} → ${fmtDateTime(win.t1)}`
+    + ` · ${fmtDur(win.t1-win.t0).trim()} · ${win.samples.length} samples · ${win.alarms.length} alarms`
+    + ` · ${win.events.length} events · ${win.modes.length} mode changes`
+    + ` · ${win.bursts.length} photo bursts</div>`;
+  return h;
+}
+function buildStats(win){
+  const host=document.getElementById('stats-d'); if(!host) return;
+  host.innerHTML = `<summary>Statistics for this window — min / max / average per variable</summary>`
+    + statsTableHTML(win);
 }
 function xToTime(e){ const r=CTRL.svg.getBoundingClientRect();
   const vbX=(e.clientX-r.left)/r.width*VB_W; const frac=(vbX-ML)/((VB_W-MR)-ML);
@@ -612,13 +841,13 @@ function updateAt(t){ const win=CTRL.win; if(!win||!win.samples||!win.samples.le
     for(const a of win.alarms){ if(a[0]>lo && a[0]<=hi) seen[a[1]]=(seen[a[1]]||0)+1; }
     const types=Object.keys(seen);
     alc.innerHTML = types.length
-      ? types.map(t=>`<span style="color:${DATA.alarmColors[t]||'#555'}">${t}${seen[t]>1?' ×'+seen[t]:''}</span>`).join('<br>')
+      ? types.map(t=>`<span style="color:${DATA.alarmColors[t]||'#555'}">${esc(t)}${seen[t]>1?' ×'+seen[t]:''}</span>`).join('<br>')
       : '—'; }
   const mc=document.getElementById('ro-d-mode'); if(mc){ mc.textContent = modeAt(s[0]) || '—'; }
   const evc=document.getElementById('ro-d-ev');
   if(evc){ const list=[]; for(const e of win.events){ if(e[0]>lo && e[0]<=hi) list.push(e[1]); }
     evc.innerHTML = list.length
-      ? list.map(x=>`<span style="color:${EVENT_COLOR}">${x}</span>`).join('<br>') : '—'; } }
+      ? list.map(x=>`<span style="color:${EVENT_COLOR}">${esc(x)}</span>`).join('<br>') : '—'; } }
 function hideCursor(){ const cx=document.getElementById('cx-d'); if(cx) cx.setAttribute('visibility','hidden');
   VARS.forEach((v,k)=>{ const hg=document.getElementById('hg-d-'+k), dot=document.getElementById('dot-d-'+k), cell=document.getElementById('ro-d-'+k);
     if(hg) hg.setAttribute('visibility','hidden'); if(dot) dot.setAttribute('visibility','hidden'); if(cell) cell.textContent='—'; });
@@ -626,10 +855,11 @@ function hideCursor(){ const cx=document.getElementById('cx-d'); if(cx) cx.setAt
   const alc=document.getElementById('ro-d-al'); if(alc) alc.textContent='—';
   const mc=document.getElementById('ro-d-mode'); if(mc) mc.textContent='—';
   const evc=document.getElementById('ro-d-ev'); if(evc) evc.textContent='—'; }
-function lockAt(ts){ if(!CTRL.win) return; CTRL.locked=true;
+function lockAt(ts, noScroll){ if(!CTRL.win) return; CTRL.locked=true;
   const lb=document.getElementById('lock-d'); if(lb) lb.hidden=false;
   const hint=document.getElementById('hint-d'); if(hint) hint.textContent='locked · click to unlock';
   updateAt(Math.max(CTRL.win.t0, Math.min(ts, CTRL.win.t1)));
+  if(noScroll) return;
   const card=document.getElementById('card-d'); if(card) card.scrollIntoView({behavior:'smooth', block:'center'}); }
 
 // ============================ init ============================
@@ -639,16 +869,22 @@ document.getElementById('q-start').value = msToInput(TMIN);
 document.getElementById('q-end').value = msToInput(TMAX);
 document.getElementById('q-width').value = String(DATA.initialHours);
 updateRegionLbl();
+renderPatientLegend();
 buildOverview();
 (function(){
-  const p=new URLSearchParams(location.search); const t=p.get('t');
-  if(t!=null && !isNaN(+t)){
+  const p=new URLSearchParams(location.search);
+  const t=p.get('t'), from=p.get('from'), to=p.get('to');
+  if(from!=null && to!=null && !isNaN(+from) && !isNaN(+to)){
+    // a patient segment: zoom the overview to [from,to] and show the whole span
+    applyRegion(+from, +to);
+  } else if(t!=null && !isNaN(+t)){
     const w=DATA.initialHours*HOUR; let a=Math.max(TMIN,(+t)-w/2), b=a+w;
     if(b>TMAX){ b=TMAX; a=Math.max(TMIN,b-w); }
     setSel(a,b); setTimeout(()=>lockAt(+t), 60);
   } else {
     setSel(TMIN, Math.min(TMAX, TMIN + DATA.initialHours*HOUR));
   }
+  updatePatientBanner();
 })();
 </script>
 </body></html>

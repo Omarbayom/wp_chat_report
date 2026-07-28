@@ -19,10 +19,19 @@ from __future__ import annotations
 import io
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+
+def _show_unexpected(exc: Exception) -> None:
+    """Report an unexpected error *with* its traceback, so the failing line is
+    visible instead of just the message."""
+    st.error(f"Unexpected error: {exc}")
+    with st.expander("Show technical details (traceback)"):
+        st.code("".join(traceback.format_exc()), language="text")
 
 # --- Make the wa_report package importable when run from this folder ---
 HERE = Path(__file__).resolve().parent
@@ -202,7 +211,7 @@ with tab_report:
                 except ValueError as exc:
                     st.error(f"Could not build the report: {exc}")
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"Unexpected error: {exc}")
+                    _show_unexpected(exc)
 
             if outputs:
                 meta = st.session_state.get("_last_report_meta", {})
@@ -329,7 +338,7 @@ with tab_cyclic:
                     st.error(f"Could not build the timeline: {exc}")
                 except Exception as exc:  # noqa: BLE001
                     cyc_report = None
-                    st.error(f"Unexpected error: {exc}")
+                    _show_unexpected(exc)
 
             if cyc_report is not None:
                 st.success(
@@ -461,7 +470,7 @@ with tab_combined:
                 except ValueError as exc:
                     st.error(f"Could not build the pages: {exc}")
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"Unexpected error: {exc}")
+                    _show_unexpected(exc)
 
             if pages:
                 import zipfile

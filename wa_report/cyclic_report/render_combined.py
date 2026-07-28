@@ -30,8 +30,11 @@ from .. import media
 from ..parser import load_and_merge
 from .alarms import load_alarms, load_log_events
 from .bursts import detect_bulk_events
+from .alarms import load_patient_add_events
 from .config import ALARM_COLORS, DEFAULT_VARIABLES, VARIABLE_UNITS
 from .data_loader import load_cyclic, load_modes
+from .patient import load_patient_info
+from .roster import assemble_roster
 from .plotting import window_title
 from .windowing import split_windows
 
@@ -122,6 +125,13 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
     t_min = min(all_ms) if all_ms else 0
     t_max = max(all_ms) if all_ms else 0
 
+    # Per-patient roster: split the log at each "Add New Patient" handover. The
+    # last segment is the current patient (preamble); earlier ones get b1/b2/…
+    patient_pairs = load_patient_info(cyclic_source)
+    add_ms = [_ms(t) for t in load_patient_add_events(alarms_source)]
+    patients = assemble_roster(patient_pairs, add_ms, list(dts),
+                               [a[0] for a in alarms_flat], t_min, t_max)
+
     payload = {
         "vars": present,
         "defaultVars": default_sel,
@@ -132,6 +142,7 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
         "tMin": t_min, "tMax": t_max,
         "sampleMin": s_min if s_min is not None else 0,
         "sampleMax": s_max if s_max is not None else 0,
+        "patients": patients,
     }
     meta = {
         "missing": missing,
@@ -145,6 +156,8 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
         "n_events": len(events_flat),
         "img_times": img_times,
         "df": df,
+        "patient": patient_pairs,
+        "patients": patients,
     }
     return payload, meta
 

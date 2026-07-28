@@ -29,7 +29,7 @@ def load_modes(source) -> List[Tuple["pd.Timestamp", str]]:
     if "ModeName" not in df.columns or "DateTime" not in df.columns:
         return []
     dt = parse_datetimes(df["DateTime"], dayfirst=True)
-    names = df["ModeName"].astype(str).map(lambda s: _TAG.sub("", s).strip())
+    names = df["ModeName"].astype(str).map(lambda s: _TAG.sub("", s).strip() if isinstance(s, str) else s)
     d = pd.DataFrame({"dt": dt, "m": names}).dropna(subset=["dt"])
     d = d[(d["m"] != "") & (d["m"].str.lower() != "nan")].sort_values("dt")
     out: List[Tuple["pd.Timestamp", str]] = []

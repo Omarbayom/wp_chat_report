@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .config import DEFAULT_VARIABLES
+from .patient import banner_html
 from .render_combined import _esc, build_payload
 
 _WINDOW_CHOICES = [1, 2, 3, 6, 12, 24]
@@ -41,7 +42,7 @@ def build_windows_html(folders, cyclic_source, variables: Sequence[str],
                        chat_href: str = "report.html",
                        stock_href: str = "charts.html", min_photos: int = 3,
                        window_minutes: int = 10, window_hours: int = 1,
-                       out_path: Optional[Path] = None) -> str:
+                       patient_href: str = "", out_path: Optional[Path] = None) -> str:
     """One graph per clock-aligned window. The window size and the plotted
     variables are chosen live in the browser; burst markers open *chat_href* at
     the matching image; a ``?t=<ms>`` query on load scrolls to and locks that
@@ -51,6 +52,15 @@ def build_windows_html(folders, cyclic_source, variables: Sequence[str],
                                   alarms_source=alarms_source,
                                   min_photos=min_photos,
                                   window_minutes=window_minutes)
+    patients = meta.get("patients", [])
+    cur = [tuple(x) for x in patients[-1]["info"]] if patients else []
+    device_label = device_label or (patients[-1]["label"] if patients else "")
+    multi = len(patients) > 1
+    banner = (banner_html(
+        cur, link_href=(patient_href or None),
+        note=(f"1 of {len(patients)} patients — this view shows the whole log" if multi else ""),
+        link_text=("All patients ↗" if multi else "Details ↗"),
+        color=(patients[-1].get("color", "") if multi else "")) if patients else "")
     initial = window_hours if window_hours in _WINDOW_CHOICES else 1
     payload["windowHours"] = initial
     choices = sorted(set(_WINDOW_CHOICES + [window_hours]))
@@ -93,6 +103,7 @@ def build_windows_html(folders, cyclic_source, variables: Sequence[str],
            .replace("__NBURST__", str(meta["n_bursts"]))
            .replace("__NALARM__", str(meta["n_alarms"]))
            .replace("__NOTES__", notes)
+           .replace("__PATIENT__", banner)
            .replace("/*__DATA__*/", json.dumps(payload)))
     if out_path is not None:
         Path(out_path).write_text(doc, encoding="utf-8")
@@ -110,8 +121,12 @@ _WINDOWS_PAGE = r"""<!DOCTYPE html>
   header { background:#0a6ebd; color:#fff; padding:12px 20px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
   header h1 { margin:0; font-size:18px; }
   header .sub { opacity:.9; font-size:12.5px; }
-  header .ctl { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  header .ctl { margin-left:auto; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  header .ctl label { display:inline-flex; align-items:center; gap:5px; }
   header select { font:inherit; padding:4px 8px; border-radius:6px; border:0; }
+  header input[type="number"] { font:inherit; padding:4px 6px; border-radius:6px; border:0; width:62px; }
+  header button { font:inherit; padding:4px 10px; border-radius:6px; border:0; background:#0a58a0; color:#fff; cursor:pointer; }
+  header button:hover { background:#094e8c; }
   header a.other { color:#fff; background:rgba(255,255,255,.18); padding:6px 12px;
     border-radius:8px; text-decoration:none; font-size:13px; }
   header a.other:hover { background:rgba(255,255,255,.32); }
@@ -142,19 +157,57 @@ _WINDOWS_PAGE = r"""<!DOCTYPE html>
   .lock-badge { font-size:11px; color:#c0392b; margin-left:8px; font-weight:600; }
   .alarm-only { font-size:11px; color:#8a5b00; margin-left:8px; font-weight:600; }
   .chart-row { display:flex; gap:10px; align-items:flex-start; }
-  svg.chart { flex:1 1 auto; width:100%; height:auto; cursor:crosshair; }
+  svg.chart { flex:1 1 auto; width:100%; height:auto; cursor:crosshair; user-select:none; }
   .readout { flex:0 0 160px; font-size:12px; }
   .readout table { border-collapse:collapse; width:100%; }
   .readout td { border-bottom:1px solid #eef2f6; padding:2px 4px; }
   .readout td.k { color:#5b6b7b; } .readout td.v { text-align:right; font-weight:600; }
   .readout td.al { text-align:left; font-weight:600; font-size:11px; line-height:1.35; }
   .readout .hint { color:#5b6b7b; font-style:italic; margin-top:6px; font-size:11px; }
+  /* focus mode (double-click a panel) */
+  .focus-note { font-size:12px; color:#0a6ebd; background:#eaf4fc; border:1px solid #bcdcf5;
+    border-radius:20px; padding:3px 10px; margin-left:auto; }
+  .focus-note button { font:inherit; font-size:11.5px; margin-left:6px; padding:1px 8px;
+    border-radius:12px; border:1px solid #0a6ebd; background:#fff; color:#0a6ebd; cursor:pointer; }
+  /* event / mode titles under the time axis — selectable text, clickable chips */
+  .ledger { margin-top:8px; border-top:1px solid #eef2f6; padding-top:6px; }
+  .ledger-h { font-size:11.5px; color:#5b6b7b; margin:0 0 4px; }
+  .ledger-h b { color:#1d2733; }
+  .ledger .chips { display:flex; flex-wrap:wrap; gap:5px; max-height:150px; overflow:auto;
+    user-select:text; -webkit-user-select:text; }
+  .chip { font-size:11.5px; border-radius:14px; padding:2px 9px; cursor:pointer;
+    user-select:text; -webkit-user-select:text; background:#e9f7f7; border:1px solid #b6e4e4; color:#14555a; }
+  .chip b { font-variant-numeric:tabular-nums; color:#0aa3a3; margin-right:5px; font-weight:700; }
+  .chip:hover { border-color:#0aa3a3; }
+  .chip.sel { background:#0aa3a3; border-color:#0aa3a3; color:#fff; } .chip.sel b { color:#fff; }
+  .chip.mode { background:#f3eefc; border-color:#dccdf5; color:#452a75; }
+  .chip.mode b { color:#6f42c1; }
+  .chip.mode.sel { background:#6f42c1; border-color:#6f42c1; color:#fff; }
+  /* per-window statistics */
+  .statbox { margin-top:8px; border-top:1px solid #eef2f6; padding-top:6px; }
+  .statbox summary { cursor:pointer; font-size:12px; font-weight:600; color:#0a6ebd; }
+  table.st { border-collapse:collapse; margin-top:6px; font-size:11.5px; }
+  table.st th, table.st td { border:1px solid #eef2f6; padding:2px 9px; text-align:right;
+    font-variant-numeric:tabular-nums; }
+  table.st th { background:#f7f9fc; color:#5b6b7b; font-weight:600; }
+  table.st td.n, table.st th.n { text-align:left; font-weight:600; color:#1d2733; }
+  table.st .u { color:#5b6b7b; font-weight:400; font-size:10.5px; }
+  .stat-foot { font-size:11px; color:#5b6b7b; margin-top:5px; }
   @media (max-width:720px){ .chart-row{ flex-direction:column; } .readout{ flex-basis:auto; width:100%; } }
 </style></head><body>
-<header><h1>__DEVICE__</h1><div class="sub">one graph per window · hover for values · click to lock</div>
+<header><h1>__DEVICE__</h1><div class="sub">one graph per window · hover for values · click to lock · double-click a graph to focus it</div>
   <div class="ctl">
     <label style="font-size:13px">Window
-      <select id="winsize" onchange="render(+this.value)">__WINOPTS__</select>
+      <select id="winsize" onchange="setWinHours(+this.value)">__WINOPTS__</select>
+    </label>
+    <label style="font-size:13px" title="Type any window size">Custom
+      <input type="number" id="winsize-n" min="0.25" step="0.25" placeholder="e.g. 90">
+      <select id="winsize-u">
+        <option value="min">min</option>
+        <option value="hour" selected>hours</option>
+        <option value="day">days</option>
+      </select>
+      <button type="button" id="winsize-apply">Set</button>
     </label>
     <a class="other" href="__STOCKHREF__" target="wa_charts">Stock view ↗</a>
     __CHATLINK__
@@ -164,8 +217,9 @@ _WINDOWS_PAGE = r"""<!DOCTYPE html>
   <div class="stat"><b>__NBURST__</b> <span>photo bursts</span></div>
   <div class="stat"><b>__NALARM__</b> <span>alarms</span></div>
 </div>
+__PATIENT__
 __NOTES__
-<div class="varbar"><span class="lbl">Y axis:</span>__VAROPTS__</div>
+<div class="varbar"><span class="lbl">Y axis:</span>__VAROPTS__<span class="focus-note" id="focus-note" hidden></span></div>
 <div class="controls">
   <label class="q">Range start (date & time)
     <input type="datetime-local" id="q-start" step="1">
@@ -190,13 +244,43 @@ const ALLVARS = DATA.vars, UNITS = DATA.units;
 const COL = {}; ALLVARS.forEach((v,i)=>{ COL[v]=i+1; });
 let VARS = (DATA.defaultVars && DATA.defaultVars.length ? DATA.defaultVars : ALLVARS).slice();
 const MODE_COLOR = '#6f42c1', EVENT_COLOR = '#0aa3a3';
+const PATIENTS = DATA.patients || [];
+function colorAt(t){ for(const s of PATIENTS){ if(t>=s.t0 && t<=s.t1) return s.color||'#0a6ebd'; } return '#0a6ebd'; }
 function modeAt(t){ let m=null; for(const md of DATA.modes){ if(md[0]<=t) m=md[1]; else break; } return m; }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// focus mode: double-clicking a variable panel blows it up and shrinks the rest
+// (in every window card, so the graphs stay comparable side by side)
+const FOCUS_H = 260, MINI_H = 26;
+let FOCUS = null;                                        // focused variable, or null
+function panelHeights(){ return VARS.map(v => !FOCUS ? PANEL_H : (v===FOCUS ? FOCUS_H : MINI_H)); }
+function gridVals(mn, mx, h){ const n = h>=150 ? 4 : (h>=44 ? 2 : 1); const out=[];
+  for(let i=0;i<=n;i++) out.push(mn+(mx-mn)*i/n); return out; }
+function setFocus(v){ FOCUS = (v && v!==FOCUS) ? v : null; updateFocusNote(); render(curStepMs()); }
+function updateFocusNote(){ const n=document.getElementById('focus-note'); if(!n) return;
+  n.hidden = !FOCUS;
+  if(FOCUS) n.innerHTML = `focused on <b>${esc(FOCUS)}</b> — the other graphs are shrunk`
+    + `<button type="button" onclick="setFocus(null)">show all</button>`; }
 const DAY = 86400000;
 let WINDOWS = [];
 const CTRL = {};
 // REGION = the searched extent; only windows overlapping it are listed. The
-// window *size* stays a manual choice (the selector). Search sets REGION only.
+// window *size* stays a manual choice — a preset (the selector) or any custom
+// size the user types. STEP_MS is the current window size in milliseconds.
 let REGION = { r0: DATA.tMin, r1: DATA.tMax };
+let STEP_MS = DATA.windowHours*3600000;
+function curStepMs(){ return STEP_MS; }
+function unitMs(u){ return u==='min' ? 60000 : (u==='day' ? 86400000 : 3600000); }
+function setWinHours(h){ STEP_MS = h*3600000; render(STEP_MS); }
+function applyCustomWin(){                       // any window size the user types
+  const n=parseFloat(document.getElementById('winsize-n').value);
+  if(!isFinite(n) || n<=0){ alert('Enter a positive window size.'); return; }
+  const ms=n*unitMs(document.getElementById('winsize-u').value);
+  if(ms < 60000){ alert('Minimum window size is 1 minute.'); return; }
+  const est=Math.ceil((REGION.r1-REGION.r0)/ms);
+  if(est>400 && !confirm(est+' windows would be drawn, which may be slow. Continue?')) return;
+  STEP_MS=ms; render(STEP_MS);
+}
 function pad(n){ return String(n).padStart(2,'0'); }
 function fmtTime(ms){ const d=new Date(ms); return pad(d.getUTCHours())+':'+pad(d.getUTCMinutes()); }
 function fmtDateTime(ms){ const d=new Date(ms);
@@ -208,10 +292,12 @@ function inputToMs(v){ if(!v) return null; const m=v.match(/(\d+)-(\d+)-(\d+)T(\
   if(!m) return null; return Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+(m[6]||0)); }
 function fmtTimeS(ms){ const d=new Date(ms); return pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds()); }
 function fmtDate(ms){ const d=new Date(ms); return pad(d.getUTCDate())+'/'+pad(d.getUTCMonth()+1)+'/'+d.getUTCFullYear(); }
-function titleFor(t0,t1,hours){ if(hours>=24) return fmtDate(t0);
+function titleFor(t0,t1,stepMs){ if(stepMs>=DAY) return fmtDate(t0);
+  const sub = stepMs < 3600000;                 // sub-hour windows: show seconds
+  const ft = sub ? fmtTimeS : fmtTime;
   const d0=fmtDate(t0), d1=fmtDate(t1-1);
-  if(d0===d1) return d0+'  '+fmtTime(t0)+'–'+fmtTime(t1);
-  return fmtDate(t0)+' '+fmtTime(t0)+' – '+fmtDate(t1)+' '+fmtTime(t1); }
+  if(d0===d1) return d0+'  '+ft(t0)+'–'+ft(t1);
+  return fmtDate(t0)+' '+ft(t0)+' – '+fmtDate(t1)+' '+ft(t1); }
 function nearest(samples, t){ let lo=0, hi=samples.length-1; if(hi<0) return -1;
   while(lo<hi){ const m=(lo+hi)>>1; if(samples[m][0]<t) lo=m+1; else hi=m; }
   if(lo>0 && (t-samples[lo-1][0])<(samples[lo][0]-t)) return lo-1; return lo; }
@@ -220,10 +306,11 @@ function onVarToggle(){
   const sel=boxes.filter(b=>b.checked).map(b=>b.value);
   if(!sel.length) return;
   VARS = ALLVARS.filter(v=>sel.includes(v));
-  render(+document.getElementById('winsize').value);
+  if(FOCUS && !VARS.includes(FOCUS)){ FOCUS=null; updateFocusNote(); }
+  render(curStepMs());
 }
-function makeWindows(hours){
-  const step=hours*3600000;
+function makeWindows(stepMs){
+  const step=stepMs;
   const align = Math.floor(DATA.tMin/DAY)*DAY + Math.floor((DATA.tMin - Math.floor(DATA.tMin/DAY)*DAY)/step)*step;
   const slot = t => Math.floor((t-align)/step);
   const map = new Map();
@@ -234,7 +321,7 @@ function makeWindows(hours){
   for(const e of DATA.events){ if(e[0]<REGION.r0||e[0]>REGION.r1) continue; W(slot(e[0])).events.push(e); }
   for(const b of DATA.bursts){ if(b[0]<REGION.r0||b[0]>REGION.r1) continue; const w=map.get(slot(b[0])); if(w) w.bursts.push(b); }
   const wins=[...map.values()].filter(w=>w.samples.length || w.alarms.length || w.modes.length || w.events.length).sort((a,b)=>a.t0-b.t0);
-  wins.forEach((w,i)=>{ w.i=i; w.title=titleFor(w.t0,w.t1,hours); w.alarmOnly=!w.samples.length; });
+  wins.forEach((w,i)=>{ w.i=i; w.title=titleFor(w.t0,w.t1,stepMs); w.alarmOnly=!w.samples.length; });
   return wins;
 }
 function cardHTML(w){ const badge = w.alarmOnly
@@ -242,9 +329,11 @@ function cardHTML(w){ const badge = w.alarmOnly
     : `<span class="lock-badge" id="lock-${w.i}" hidden>🔒 locked</span>`;
   return `<div class="card" id="card-${w.i}"><div class="card-h">${w.title}${badge}</div>`
   + `<div class="chart-row"><svg class="chart" id="chart-${w.i}"></svg>`
-  + `<div class="readout" id="readout-${w.i}"></div></div></div>`; }
-function render(hours){
-  WINDOWS = makeWindows(hours);
+  + `<div class="readout" id="readout-${w.i}"></div></div>`
+  + `<div class="ledger" id="ledger-${w.i}"></div>`
+  + `<details class="statbox" id="stats-${w.i}" open></details></div>`; }
+function render(stepMs){
+  WINDOWS = makeWindows(stepMs);
   const host = document.getElementById('charts');
   host.innerHTML = WINDOWS.length ? WINDOWS.map(cardHTML).join('')
     : '<p class="muted">No cyclic data or alarms in this region.</p>';
@@ -252,7 +341,6 @@ function render(hours){
   WINDOWS.forEach(buildChart);
   const sw=document.getElementById('stat-windows'); if(sw) sw.textContent=WINDOWS.length;
 }
-function curHours(){ return +document.getElementById('winsize').value; }
 function updateRegionLbl(){
   const lbl=document.getElementById('span-lbl'); if(!lbl) return;
   const full = REGION.r0<=DATA.tMin && REGION.r1>=DATA.tMax;
@@ -265,13 +353,13 @@ function applyRegion(a, b){
   REGION.r0=a; REGION.r1=b;
   document.getElementById('q-start').value=msToInput(a);
   document.getElementById('q-end').value=msToInput(b);
-  updateRegionLbl(); render(curHours());
+  updateRegionLbl(); render(curStepMs());
 }
 function resetRegion(){
   REGION.r0=DATA.tMin; REGION.r1=DATA.tMax;
   document.getElementById('q-start').value=msToInput(DATA.tMin);
   document.getElementById('q-end').value=msToInput(DATA.tMax);
-  updateRegionLbl(); render(curHours());
+  updateRegionLbl(); render(curStepMs());
 }
 document.getElementById('q-apply').addEventListener('click', ()=>{
   const a=inputToMs(document.getElementById('q-start').value);
@@ -280,13 +368,16 @@ document.getElementById('q-apply').addEventListener('click', ()=>{
   applyRegion(a, b);
 });
 document.getElementById('q-reset').addEventListener('click', resetRegion);
+document.getElementById('winsize-apply').addEventListener('click', applyCustomWin);
+document.getElementById('winsize-n').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyCustomWin(); } });
 function buildChart(win){
   const svg = document.getElementById('chart-'+win.i);
   const alarmTypes = [...new Set(win.alarms.map(a=>a[1]))]
         .sort((a,b)=>Object.keys(DATA.alarmColors).indexOf(a)-Object.keys(DATA.alarmColors).indexOf(b));
   const laneH = alarmTypes.length ? alarmTypes.length*LANE_ROW + 8 : 0;
   const nV = VARS.length;
-  const H = TOP + laneH + nV*(PANEL_H+PANEL_GAP) + XAXIS_H;
+  const PH = panelHeights();                    // focused panel tall, the rest shrunk
+  const H = TOP + laneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + XAXIS_H;
   svg.setAttribute('viewBox', `0 0 ${VB_W} ${H}`);
   const plotL = ML, plotR = VB_W - MR;
   const xOf = t => plotL + (t-win.t0)/(win.t1-win.t0)*(plotR-plotL);
@@ -294,9 +385,11 @@ function buildChart(win){
     for(const s of win.samples){ const y=s[c]; if(y==null) continue; if(y<mn)mn=y; if(y>mx)mx=y; }
     if(mn===Infinity){ mn=0; mx=1; } if(mn===mx){ mn-=1; mx+=1; }
     const pad=(mx-mn)*0.08; return [mn-pad, mx+pad]; });
-  const panelTop = k => TOP + laneH + k*(PANEL_H+PANEL_GAP);
-  const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PANEL_H; };
-  const panelsBottom = panelTop(nV-1) + PANEL_H;
+  const tops = []; { let y = TOP + laneH;
+    for(let k=0;k<nV;k++){ tops.push(y); y += PH[k] + PANEL_GAP; } }
+  const panelTop = k => tops[k];
+  const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PH[k]; };
+  const panelsBottom = panelTop(nV-1) + PH[nV-1];
   let parts = [];
   if(alarmTypes.length){ alarmTypes.forEach((a,r)=>{ const y = TOP + r*LANE_ROW + LANE_ROW/2;
     const col = DATA.alarmColors[a] || '#888';
@@ -304,15 +397,21 @@ function buildChart(win){
     for(const ev of win.alarms){ if(ev[1]!==a) continue;
       parts.push(`<rect x="${xOf(ev[0])-1.5}" y="${y-3}" width="3" height="6" fill="${col}"/>`); } }); }
   VARS.forEach((v,k)=>{ const c=COL[v], top=panelTop(k), [mn,mx]=ranges[k];
-    parts.push(`<rect x="${plotL}" y="${top}" width="${plotR-plotL}" height="${PANEL_H}" fill="none" stroke="#e3e8ee"/>`);
-    [mn,(mn+mx)/2,mx].forEach(val=>{ const y=yOf(k,val);
+    parts.push(`<rect x="${plotL}" y="${top}" width="${plotR-plotL}" height="${PH[k]}" fill="${FOCUS===v?'#f7fbff':'none'}" stroke="${FOCUS===v?'#bcdcf5':'#e3e8ee'}"/>`);
+    gridVals(mn, mx, PH[k]).forEach(val=>{ const y=yOf(k,val);
       parts.push(`<line x1="${plotL}" y1="${y}" x2="${plotR}" y2="${y}" stroke="#eef2f6"/>`);
-      parts.push(`<text x="${plotL-5}" y="${y+3}" text-anchor="end" font-size="8" fill="#5b6b7b">${val.toFixed(0)}</text>`); });
+      parts.push(`<text x="${plotL-5}" y="${y+3}" text-anchor="end" font-size="8" fill="#5b6b7b">${val.toFixed(PH[k]>=150?1:0)}</text>`); });
     parts.push(`<text x="${plotL+4}" y="${top+11}" font-size="10" font-weight="bold" fill="#1d2733">${v} (${UNITS[v]||''})</text>`);
-    let d='', pen=false;
-    for(const s of win.samples){ const val=s[c]; if(val==null){ pen=false; continue; }
+    // double-click target: focuses this panel (and shrinks the others)
+    parts.push(`<rect class="panel-hit" data-v="${esc(v)}" x="${plotL}" y="${top}" width="${plotR-plotL}"`
+      + ` height="${PH[k]}" fill="transparent" style="cursor:${FOCUS===v?'zoom-out':'zoom-in'}">`
+      + `<title>${esc(v)} — double-click to ${FOCUS===v?'show all graphs again':'focus this graph'}</title></rect>`);
+    let d='', pen=false, col=null; const sw=(FOCUS===v?1.8:1.4);
+    const flush=()=>{ if(d) parts.push(`<path d="${d}" fill="none" stroke="${col||'#0a6ebd'}" stroke-width="${sw}"/>`); d=''; pen=false; };
+    for(const s of win.samples){ const val=s[c]; if(val==null){ flush(); continue; }
+      const cc=colorAt(s[0]); if(cc!==col){ flush(); col=cc; }
       const x=xOf(s[0]), y=yOf(k,val); d += (pen?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' '; pen=true; }
-    parts.push(`<path d="${d}" fill="none" stroke="#0a6ebd" stroke-width="1.4"/>`);
+    flush();
     parts.push(`<line class="hg" id="hg-${win.i}-${k}" x1="${plotL}" x2="${plotR}" y1="0" y2="0" stroke="#c0392b" stroke-width="0.8" stroke-dasharray="4 3" visibility="hidden"/>`);
     parts.push(`<circle class="dot" id="dot-${win.i}-${k}" r="3" fill="#c0392b" visibility="hidden"/>`); });
   const nTicks=6;
@@ -325,10 +424,14 @@ function buildChart(win){
     parts.push(`<rect class="burst-hit" x="${x-5}" y="${TOP}" width="10" height="${panelsBottom-TOP}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTimeS(b[0])} — click to see in chat</title></rect>`); }
   let lastMX=-1e9;
   for(const m of win.modes){ const x=xOf(m[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${m[1]} at ${fmtTimeS(m[0])}</title></line>`);
-    if(x-lastMX>46){ parts.push(`<text x="${x+2}" y="${panelsBottom-2}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${m[1]}</text>`); lastMX=x; } }
+    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${esc(m[1])} at ${fmtTimeS(m[0])}</title></line>`);
+    if(x-lastMX>46){ parts.push(`<text x="${x+2}" y="${panelsBottom-2}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${esc(m[1])}</text>`); lastMX=x; } }
+  // event ticks: one along the top edge, one just under the time axis so they
+  // line up with the selectable titles listed below the chart
   for(const e of win.events){ const x=xOf(e[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${e[1]} at ${fmtTimeS(e[0])}</title></line>`); }
+    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTimeS(e[0])}</title></line>`);
+    parts.push(`<line x1="${x}" y1="${panelsBottom+18}" x2="${x}" y2="${panelsBottom+25}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTimeS(e[0])}</title></line>`); }
+  parts.push(`<line id="ev-pick-${win.i}" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom+25}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
   parts.push(`<line class="cx" id="cx-${win.i}" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
   svg.innerHTML = parts.join('');
   const ro = document.getElementById('readout-'+win.i);
@@ -337,17 +440,94 @@ function buildChart(win){
   rows += `<tr><td class="k">Mode</td><td class="v" id="ro-${win.i}-mode">—</td></tr>`;
   rows += `<tr><td class="k">Alarms</td><td class="v al" id="ro-${win.i}-al">—</td></tr>`;
   rows += `<tr><td class="k">Events</td><td class="v al" id="ro-${win.i}-ev">—</td></tr>`;
-  rows += `</table><div class="hint" id="hint-${win.i}">hover to read · click to lock</div>`;
+  rows += `</table><div class="hint" id="hint-${win.i}">hover to read · click to lock · double-click a graph to focus</div>`;
   ro.innerHTML = rows;
-  CTRL[win.i] = { win, svg, xOf, yOf, locked:false };
+  CTRL[win.i] = { win, svg, xOf, yOf, locked:false, H,
+    bands: VARS.map((v,k)=>[panelTop(k), panelTop(k)+PH[k], v]) };
   svg.addEventListener('mousemove', e=>{ const c=CTRL[win.i]; if(c.locked) return; updateAt(win.i, xToTime(win.i, e)); });
   svg.addEventListener('mouseleave', ()=>{ const c=CTRL[win.i]; if(!c.locked) hideCursor(win.i); });
   svg.addEventListener('click', e=>{
     if(e.target.classList.contains('burst-hit')){ const cid=e.target.getAttribute('data-cid'); if(cid) jumpToChat(cid); return; }
     const c=CTRL[win.i]; c.locked=!c.locked;
     const lb=document.getElementById('lock-'+win.i); if(lb) lb.hidden = !c.locked;
-    document.getElementById('hint-'+win.i).textContent = c.locked ? 'locked · click to unlock' : 'hover to read · click to lock';
+    document.getElementById('hint-'+win.i).textContent = c.locked ? 'locked · click to unlock' : 'hover to read · click to lock · double-click a graph to focus';
     if(c.locked) updateAt(win.i, xToTime(win.i, e)); });
+  svg.addEventListener('dblclick', e=>{ const v=varAtEvent(win.i, e); if(v) setFocus(v); });
+  buildLedger(win);
+  buildStats(win);
+}
+// which variable panel is under the pointer: normally the panel's own hit rect
+// is the target; when the double-click lands on something drawn over it (the
+// trace, a marker line, a burst hit-box) fall back to the Y band it sits in.
+function varAtEvent(i, e){
+  const hit = e.target && e.target.closest ? e.target.closest('.panel-hit') : null;
+  if(hit) return hit.getAttribute('data-v');
+  const c=CTRL[i]; if(!c || !c.bands) return null;
+  const r=c.svg.getBoundingClientRect(); if(!r.height) return null;
+  const y=(e.clientY-r.top)/r.height*c.H;
+  for(const b of c.bands){ if(y>=b[0]-PANEL_GAP/2 && y<=b[1]+PANEL_GAP/2) return b[2]; }
+  return null; }
+
+// ============ event / mode titles under the time axis (selectable + clickable) ============
+function chipHTML(i, t, txt, cls){
+  return `<span class="chip ${cls}" data-i="${i}" data-t="${t}" onclick="pickEvent(this)"`
+    + ` title="${esc(txt)} at ${fmtDateTime(t)} — click to put the cursor here">`
+    + `<b>${fmtTimeS(t)}</b>${esc(txt)}</span>`;
+}
+function buildLedger(win){
+  const host=document.getElementById('ledger-'+win.i); if(!host) return;
+  let h = `<div class="ledger-h">Events in this window — <b>${win.events.length}</b>`
+    + ` · click a title to put the cursor at that moment · the text is selectable</div>`;
+  h += `<div class="chips">` + (win.events.length
+      ? win.events.map(e=>chipHTML(win.i, e[0], e[1], 'ev')).join('')
+      : `<span class="muted">no logged events in this window</span>`) + `</div>`;
+  if(win.modes.length){
+    h += `<div class="ledger-h" style="margin-top:7px">Mode changes — <b>${win.modes.length}</b></div>`
+      + `<div class="chips">` + win.modes.map(m=>chipHTML(win.i, m[0], m[1], 'mode')).join('') + `</div>`;
+  }
+  host.innerHTML = h;
+}
+function pickEvent(el){
+  const i=+el.dataset.i, t=+el.dataset.t;
+  document.querySelectorAll('#ledger-'+i+' .chip.sel').forEach(c=>c.classList.remove('sel'));
+  el.classList.add('sel');
+  const c=CTRL[i]; if(!c) return;
+  const pk=document.getElementById('ev-pick-'+i);
+  if(pk){ const x=c.xOf(t);
+    pk.setAttribute('x1',x); pk.setAttribute('x2',x); pk.setAttribute('visibility','visible'); }
+  c.locked=true;
+  const lb=document.getElementById('lock-'+i); if(lb) lb.hidden=false;
+  const hint=document.getElementById('hint-'+i); if(hint) hint.textContent='locked · click to unlock';
+  updateAt(i, Math.max(c.win.t0, Math.min(t, c.win.t1-1)));
+}
+
+// ============================ window statistics ============================
+function fmtDur(ms){ const s=Math.round(ms/1000); const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), ss=s%60;
+  return (h?h+'h ':'')+(m?m+'m ':'')+(h?'':ss+'s'); }
+function fmtNum(x){ if(x==null || !isFinite(x)) return '—';
+  const s = Math.abs(x)>=10 ? x.toFixed(1) : x.toFixed(2);
+  return s.replace(/\.0+$/,'').replace(/(\.\d*[1-9])0+$/,'$1'); }
+function statsFor(win){
+  return VARS.map(v=>{ const c=COL[v]; let mn=Infinity, mx=-Infinity, sum=0, n=0;
+    for(const s of win.samples){ const y=s[c]; if(y==null) continue;
+      if(y<mn)mn=y; if(y>mx)mx=y; sum+=y; n++; }
+    return n ? {v,n,mn,mx,avg:sum/n} : {v,n:0,mn:null,mx:null,avg:null}; });
+}
+function buildStats(win){
+  const host=document.getElementById('stats-'+win.i); if(!host) return;
+  let h = `<summary>Statistics for this window — min / max / average per variable</summary>`
+    + `<table class="st"><tr><th class="n">Variable</th><th>Min</th><th>Max</th>`
+    + `<th>Average</th><th>Samples</th></tr>`;
+  for(const r of statsFor(win)){
+    h += `<tr><td class="n">${esc(r.v)} <span class="u">${esc(UNITS[r.v]||'')}</span></td>`
+      + `<td>${fmtNum(r.mn)}</td><td>${fmtNum(r.mx)}</td><td>${fmtNum(r.avg)}</td>`
+      + `<td>${r.n}</td></tr>`;
+  }
+  h += `</table><div class="stat-foot">${fmtDateTime(win.t0)} → ${fmtDateTime(win.t1)}`
+    + ` · ${fmtDur(win.t1-win.t0).trim()} · ${win.samples.length} samples · ${win.alarms.length} alarms`
+    + ` · ${win.events.length} events · ${win.modes.length} mode changes`
+    + ` · ${win.bursts.length} photo bursts</div>`;
+  host.innerHTML = h;
 }
 function xToTime(i, e){ const c=CTRL[i]; const r=c.svg.getBoundingClientRect();
   const vbX=(e.clientX-r.left)/r.width*VB_W; const frac=(vbX-ML)/((VB_W-MR)-ML);
@@ -371,13 +551,13 @@ function updateAt(i, t){ const c=CTRL[i], win=c.win; const idx=nearest(win.sampl
     for(const a of win.alarms){ if(a[0]>lo && a[0]<=hi) seen[a[1]]=(seen[a[1]]||0)+1; }
     const types=Object.keys(seen);
     alc.innerHTML = types.length
-      ? types.map(t=>`<span style="color:${DATA.alarmColors[t]||'#555'}">${t}${seen[t]>1?' ×'+seen[t]:''}</span>`).join('<br>')
+      ? types.map(t=>`<span style="color:${DATA.alarmColors[t]||'#555'}">${esc(t)}${seen[t]>1?' ×'+seen[t]:''}</span>`).join('<br>')
       : '—';
   }
   const mc=document.getElementById('ro-'+i+'-mode'); if(mc) mc.textContent = modeAt(s[0]) || '—';
   const evc=document.getElementById('ro-'+i+'-ev');
   if(evc){ const list=[]; for(const e of win.events){ if(e[0]>lo && e[0]<=hi) list.push(e[1]); }
-    evc.innerHTML = list.length ? list.map(x=>`<span style="color:${EVENT_COLOR}">${x}</span>`).join('<br>') : '—'; } }
+    evc.innerHTML = list.length ? list.map(x=>`<span style="color:${EVENT_COLOR}">${esc(x)}</span>`).join('<br>') : '—'; } }
 function hideCursor(i){ document.getElementById('cx-'+i).setAttribute('visibility','hidden');
   VARS.forEach((v,k)=>{ document.getElementById('hg-'+i+'-'+k).setAttribute('visibility','hidden');
     document.getElementById('dot-'+i+'-'+k).setAttribute('visibility','hidden');
@@ -397,7 +577,7 @@ function lockAtTime(ts){ if(!WINDOWS.length) return;
 document.getElementById('q-start').value = msToInput(DATA.tMin);
 document.getElementById('q-end').value = msToInput(DATA.tMax);
 updateRegionLbl();
-render(DATA.windowHours);
+render(STEP_MS);
 (function(){ const p=new URLSearchParams(location.search); const t=p.get('t');
   if(t) setTimeout(()=>lockAtTime(+t), 100); })();
 </script>
