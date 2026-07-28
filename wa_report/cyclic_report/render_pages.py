@@ -409,6 +409,14 @@ function updatePatientBanner(){
 }
 // --- detail chart geometry ---
 const VB_W = 1000, ML = 70, MR = 16, TOP = 8, PANEL_H = 78, PANEL_GAP = 6, XAXIS_H = 26, LANE_ROW = 14;
+const ALARM_SNAP_PX = 8;   // cursor within this many px of an alarm snaps onto it
+// Typical cyclic sampling gap (median of consecutive sample diffs). A cursor time
+// farther than COVER_TOL from any sample is treated as "no cyclic data here" — the
+// value cells show "—" instead of a stale/far reading.
+const SAMPLE_GAP = (function(){ const s=DATA.samples; if(!s||s.length<3) return 60000;
+  const d=[]; for(let i=1;i<s.length;i++){ const g=s[i][0]-s[i-1][0]; if(g>0) d.push(g); }
+  if(!d.length) return 60000; d.sort((a,b)=>a-b); return d[d.length>>1]; })();
+const COVER_TOL = Math.max(SAMPLE_GAP*4, 15000);
 // focus mode: double-clicking a variable panel blows it up and shrinks the rest
 const FOCUS_H = 260, MINI_H = 26;
 let FOCUS = null;                                        // focused variable, or null
@@ -729,8 +737,13 @@ function buildChart(win){
   parts.push(`<line class="cx" id="cx-d" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
   svg.innerHTML = parts.join('');
   const ro = document.getElementById('readout-d');
+  // Readout lists EVERY present variable — deselecting one in the Y-axis picker
+  // only hides its diagram, the value is still read here (marked "graph off").
   let rows = `<table><tr><td class="k">Time</td><td class="v" id="ro-d-t">—</td></tr>`;
-  VARS.forEach((v,k)=>{ rows += `<tr><td class="k">${v}</td><td class="v" id="ro-d-${k}">—</td></tr>`; });
+  ALLVARS.forEach((v,i)=>{ const plotted = VARS.includes(v);
+    rows += `<tr><td class="k"${plotted?'':" style='opacity:.55'"}`
+      + `${plotted?'':" title='graph hidden — value still shown'"}>${v}${plotted?'':" ·"}</td>`
+      + `<td class="v" id="ro-d-v${i}">—</td></tr>`; });
   rows += `<tr><td class="k">Mode</td><td class="v" id="ro-d-mode">—</td></tr>`;
   rows += `<tr><td class="k">Alarms</td><td class="v al" id="ro-d-al">—</td></tr>`;
   rows += `<tr><td class="k">Events</td><td class="v al" id="ro-d-ev">—</td></tr>`;
@@ -738,6 +751,7 @@ function buildChart(win){
   ro.innerHTML = rows;
   CTRL.win=win; CTRL.svg=svg; CTRL.xOf=xOf; CTRL.yOf=yOf; CTRL.H=H;
   CTRL.bands=VARS.map((v,k)=>[panelTop(k), panelTop(k)+PH[k], v]);
+  CTRL.alarmT=win.alarms.map(a=>a[0]);   // alarm times, for magnetic cursor snap
   svg.addEventListener('mousemove', e=>{ if(CTRL.locked) return; updateAt(xToTime(e)); });
   svg.addEventListener('mouseleave', ()=>{ if(!CTRL.locked) hideCursor(); });
   svg.addEventListener('click', e=>{
@@ -821,21 +835,58 @@ function buildStats(win){
 function xToTime(e){ const r=CTRL.svg.getBoundingClientRect();
   const vbX=(e.clientX-r.left)/r.width*VB_W; const frac=(vbX-ML)/((VB_W-MR)-ML);
   return CTRL.win.t0 + Math.max(0,Math.min(1,frac))*(CTRL.win.t1-CTRL.win.t0); }
-function updateAt(t){ const win=CTRL.win; if(!win||!win.samples||!win.samples.length) return;
-  const idx=nearest(win.samples, t); if(idx<0) return;
-  const s=win.samples[idx]; const x=CTRL.xOf(s[0]);
+// nearest index in a plain sorted ms array
+function nearestMs(arr, t){ let lo=0, hi=arr.length-1; if(hi<0) return -1;
+  while(lo<hi){ const m=(lo+hi)>>1; if(arr[m]<t) lo=m+1; else hi=m; }
+  if(lo>0 && (t-arr[lo-1])<(arr[lo]-t)) return lo-1; return lo; }
+function updateAt(t){ const win=CTRL.win; if(!win) return;
+  const hasSamples = win.samples && win.samples.length;
+  let anchor, lo, hi;
+  if(hasSamples){
+    // magnetic alarm snap: if the cursor is within ALARM_SNAP_PX of an alarm,
+    // anchor to that alarm so alarms stay reachable even amid dense samples
+    const PW=(VB_W-MR)-ML, TOL=ALARM_SNAP_PX*(win.t1-win.t0)/PW;
+    const at=CTRL.alarmT; let snap=false, ai=-1;
+    if(at && at.length){ ai=nearestMs(at,t); if(Math.abs(at[ai]-t)<=TOL){ anchor=at[ai]; snap=true; } }
+    const si=nearest(win.samples, snap?anchor:t); if(si<0) return;
+    const s=win.samples[si]; if(!snap) anchor=s[0];
+    const sx=CTRL.xOf(s[0]);
+    // is there actually cyclic data at the anchor? (else values read "—")
+    const covered = Math.abs(s[0]-anchor) <= COVER_TOL;
+    // values for ALL present variables (readings kept even when the graph is off)
+    ALLVARS.forEach((v,i)=>{ const cell=document.getElementById('ro-d-v'+i); if(!cell) return;
+      const val=covered? s[COL[v]] : null; cell.textContent = (val==null)? '—' : (val + (UNITS[v]? ' '+UNITS[v] : '')); });
+    // crosshair line + dot only for the plotted (diagram) variables (dot on the trace)
+    VARS.forEach((v,k)=>{ const val=covered? s[COL[v]] : null; const hg=document.getElementById('hg-d-'+k);
+      const dot=document.getElementById('dot-d-'+k);
+      if(val==null){ if(hg) hg.setAttribute('visibility','hidden'); if(dot) dot.setAttribute('visibility','hidden'); return; }
+      const y=CTRL.yOf(k,val);
+      if(hg){ hg.setAttribute('y1',y); hg.setAttribute('y2',y); hg.setAttribute('visibility','visible'); }
+      if(dot){ dot.setAttribute('cx',sx); dot.setAttribute('cy',y); dot.setAttribute('visibility','visible'); } });
+    if(snap){   // snapped onto an alarm → show just that alarm (its cell among alarms)
+      lo = ai>0 ? (at[ai-1]+anchor)/2 : -Infinity;
+      hi = ai<at.length-1 ? (anchor+at[ai+1])/2 : Infinity;
+    } else {    // on cyclic data → alarms/events attributed to this sample's cell
+      lo = si>0 ? (win.samples[si-1][0]+s[0])/2 : -Infinity;
+      hi = si<win.samples.length-1 ? (s[0]+win.samples[si+1][0])/2 : Infinity;
+    }
+  } else {
+    // no cyclic data behind the cursor — snap to the nearest ALARM (then event /
+    // mode / burst) so alarms recorded with no cyclic log can still be read
+    const src = win.alarms.length ? win.alarms : win.events.length ? win.events
+              : win.modes.length ? win.modes : win.bursts;
+    if(!src || !src.length) return;
+    const times = src.map(a=>a[0]);
+    const ai=nearestMs(times, t); anchor=times[ai];
+    ALLVARS.forEach((v,i)=>{ const cell=document.getElementById('ro-d-v'+i); if(cell) cell.textContent='—'; });
+    VARS.forEach((v,k)=>{ const hg=document.getElementById('hg-d-'+k), dot=document.getElementById('dot-d-'+k);
+      if(hg) hg.setAttribute('visibility','hidden'); if(dot) dot.setAttribute('visibility','hidden'); });
+    lo = ai>0 ? (times[ai-1]+anchor)/2 : -Infinity;
+    hi = ai<times.length-1 ? (anchor+times[ai+1])/2 : Infinity;
+  }
+  const x=CTRL.xOf(anchor);
   const cx=document.getElementById('cx-d'); cx.setAttribute('x1',x); cx.setAttribute('x2',x); cx.setAttribute('visibility','visible');
-  document.getElementById('ro-d-t').textContent = fmtTime(s[0]);
-  VARS.forEach((v,k)=>{ const val=s[COL[v]]; const hg=document.getElementById('hg-d-'+k);
-    const dot=document.getElementById('dot-d-'+k); const cell=document.getElementById('ro-d-'+k);
-    if(val==null){ hg.setAttribute('visibility','hidden'); dot.setAttribute('visibility','hidden'); cell.textContent='—'; return; }
-    const y=CTRL.yOf(k,val);
-    hg.setAttribute('y1',y); hg.setAttribute('y2',y); hg.setAttribute('visibility','visible');
-    dot.setAttribute('cx',x); dot.setAttribute('cy',y); dot.setAttribute('visibility','visible');
-    cell.textContent = val + (UNITS[v]? ' '+UNITS[v] : ''); });
-  const n=win.samples.length;
-  const lo = idx>0 ? (win.samples[idx-1][0]+s[0])/2 : -Infinity;
-  const hi = idx<n-1 ? (s[0]+win.samples[idx+1][0])/2 : Infinity;
+  document.getElementById('ro-d-t').textContent = fmtTime(anchor);
   const alc=document.getElementById('ro-d-al');
   if(alc){ const seen={};
     for(const a of win.alarms){ if(a[0]>lo && a[0]<=hi) seen[a[1]]=(seen[a[1]]||0)+1; }
@@ -843,14 +894,15 @@ function updateAt(t){ const win=CTRL.win; if(!win||!win.samples||!win.samples.le
     alc.innerHTML = types.length
       ? types.map(t=>`<span style="color:${DATA.alarmColors[t]||'#555'}">${esc(t)}${seen[t]>1?' ×'+seen[t]:''}</span>`).join('<br>')
       : '—'; }
-  const mc=document.getElementById('ro-d-mode'); if(mc){ mc.textContent = modeAt(s[0]) || '—'; }
+  const mc=document.getElementById('ro-d-mode'); if(mc){ mc.textContent = modeAt(anchor) || '—'; }
   const evc=document.getElementById('ro-d-ev');
   if(evc){ const list=[]; for(const e of win.events){ if(e[0]>lo && e[0]<=hi) list.push(e[1]); }
     evc.innerHTML = list.length
       ? list.map(x=>`<span style="color:${EVENT_COLOR}">${esc(x)}</span>`).join('<br>') : '—'; } }
 function hideCursor(){ const cx=document.getElementById('cx-d'); if(cx) cx.setAttribute('visibility','hidden');
-  VARS.forEach((v,k)=>{ const hg=document.getElementById('hg-d-'+k), dot=document.getElementById('dot-d-'+k), cell=document.getElementById('ro-d-'+k);
-    if(hg) hg.setAttribute('visibility','hidden'); if(dot) dot.setAttribute('visibility','hidden'); if(cell) cell.textContent='—'; });
+  VARS.forEach((v,k)=>{ const hg=document.getElementById('hg-d-'+k), dot=document.getElementById('dot-d-'+k);
+    if(hg) hg.setAttribute('visibility','hidden'); if(dot) dot.setAttribute('visibility','hidden'); });
+  ALLVARS.forEach((v,i)=>{ const cell=document.getElementById('ro-d-v'+i); if(cell) cell.textContent='—'; });
   const t=document.getElementById('ro-d-t'); if(t) t.textContent='—';
   const alc=document.getElementById('ro-d-al'); if(alc) alc.textContent='—';
   const mc=document.getElementById('ro-d-mode'); if(mc) mc.textContent='—';

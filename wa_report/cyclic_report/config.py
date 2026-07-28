@@ -7,10 +7,45 @@ go on the Y axis (with display units) and the plot colours.
 from __future__ import annotations
 
 # Variables the user may put on the Y axis, with display units. Order here is the
-# order they are offered / stacked.
+# order they are offered / stacked. This is the device's full cyclic-CSV column
+# set (units are display hints; a few are best-effort). Any of these that are
+# present in a given CSV become selectable; the rest are simply ignored.
 VARIABLE_UNITS = {
-    "VTi": "ml", "VTe": "ml", "PIP": "cmH2O", "Pmean": "cmH2O",
-    "PEEP": "cmH2O", "RR": "/min", "FIO2": "%",
+    "PIF": "L/min",
+    "PEEP": "cmH2O",
+    "PIP": "cmH2O",
+    "FIO2": "%",
+    "MVi": "L/min",
+    "MVe": "L/min",
+    "VTi": "ml",
+    "VTe": "ml",
+    "RR": "/min",
+    "P Plateau": "cmH2O",
+    "Cdyn": "ml/cmH2O",
+    "Insp. Ratio": "",
+    "Exp. Ratio": "",
+    "PEF": "L/min",
+    "Pmean": "cmH2O",
+    "Raw": "cmH2O/L/s",
+    "Cstat": "ml/cmH2O",
+    "PEEPi": "cmH2O",
+    "NIF": "cmH2O",
+    "RSBI": "/min/L",
+    "Leak": "%",
+    "RRSpont": "/min",
+    "RRMand": "/min",
+    "VTiMand": "ml",
+    "VTeMand": "ml",
+    "VTiSpont": "ml",
+    "VTeSpont": "ml",
+    "VTiSpontMean": "ml",
+    "VTeSpontMean": "ml",
+    "MVeSpont": "L/min",
+    "MVeMand": "L/min",
+    "MVLeak": "L/min",
+    "PDrive": "cmH2O",
+    "VTPBW": "ml/kg",
+    "EndInspPressure": "cmH2O",
 }
 DEFAULT_VARIABLES = ["VTi", "VTe", "PIP"]
 
