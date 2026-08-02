@@ -28,9 +28,9 @@ import pandas as pd
 
 from .. import media
 from ..parser import load_and_merge
-from .alarms import load_alarms, load_log_events
+from .alarms import (load_alarm_intervals, load_alarms, load_log_events,
+                     load_patient_add_events)
 from .bursts import detect_bulk_events
-from .alarms import load_patient_add_events
 from .config import ALARM_COLORS, DEFAULT_VARIABLES, VARIABLE_UNITS
 from .data_loader import load_cyclic, load_modes
 from .patient import load_patient_info
@@ -84,7 +84,7 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
     if not default_sel:
         default_sel = present[:3]
 
-    alarms = load_alarms(alarms_source)
+    alarms = load_alarm_intervals(alarms_source)   # Activated→Deactivated intervals
     modes = load_modes(cyclic_source)              # ventilation-mode changes
     events_df = load_log_events(alarms_source)     # settings/data-change events
     # The chat is optional: with no folders there are simply no photo bursts.
@@ -107,7 +107,9 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
             row.append(None if pd.isna(x) else round(float(x), 2))
         samples.append(row)
 
-    alarms_flat = ([[_ms(dt), a] for dt, a in zip(alarms["DateTime"], alarms["Alarm"])]
+    # alarms are [start_ms, end_ms, type] intervals (active while the cursor is inside)
+    alarms_flat = ([[_ms(s), _ms(e), a] for s, e, a in
+                    zip(alarms["Start"], alarms["End"], alarms["Alarm"])]
                    if not alarms.empty else [])
     modes_flat = [[_ms(dt), name] for dt, name in modes]
     events_flat = ([[_ms(dt), ev] for dt, ev in zip(events_df["DateTime"], events_df["Event"])]
@@ -121,7 +123,8 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
         bursts_flat = [[_ms(e.start), e.count, f"img-{_ms(e.start)}"]
                        for e in events if s_min <= _ms(e.start) <= s_max]
 
-    all_ms = list(dts) + [a[0] for a in alarms_flat] + [e[0] for e in events_flat] + [m[0] for m in modes_flat]
+    all_ms = (list(dts) + [a[0] for a in alarms_flat] + [a[1] for a in alarms_flat]
+              + [e[0] for e in events_flat] + [m[0] for m in modes_flat])
     t_min = min(all_ms) if all_ms else 0
     t_max = max(all_ms) if all_ms else 0
 

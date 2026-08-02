@@ -18,7 +18,7 @@ straight from ``wa_report.cyclic_report``.
 
 from __future__ import annotations
 
-from .alarms import alarm_types_in, load_alarms
+from .alarms import alarm_types_in, load_alarm_intervals, load_alarms
 from .bursts import BulkEvent, detect_bulk_events, image_send_times
 from .config import ALARM_COLORS, DEFAULT_VARIABLES, VARIABLE_UNITS
 from .data_loader import load_cyclic
@@ -35,7 +35,7 @@ from .windowing import split_windows
 __all__ = [
     "VARIABLE_UNITS", "DEFAULT_VARIABLES", "ALARM_COLORS",
     "BulkEvent", "image_send_times", "detect_bulk_events",
-    "load_cyclic", "load_alarms", "alarm_types_in", "split_windows",
+    "load_cyclic", "load_alarms", "load_alarm_intervals", "alarm_types_in", "split_windows",
     "plot_window", "window_title",
     "WindowResult", "CyclicReport", "build_cyclic_report",
     "render_cyclic_html", "build_combined_html",

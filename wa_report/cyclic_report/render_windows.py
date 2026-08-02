@@ -322,7 +322,9 @@ function makeWindows(stepMs){
   const map = new Map();
   const W = k => { if(!map.has(k)){ const t0=align+k*step; map.set(k,{k,t0,t1:t0+step,samples:[],alarms:[],bursts:[],modes:[],events:[]}); } return map.get(k); };
   for(const s of DATA.samples){ if(s[0]<REGION.r0||s[0]>REGION.r1) continue; W(slot(s[0])).samples.push(s); }
-  for(const a of DATA.alarms){ if(a[0]<REGION.r0||a[0]>REGION.r1) continue; W(slot(a[0])).alarms.push(a); }
+  for(const a of DATA.alarms){ if(a[1]<REGION.r0||a[0]>REGION.r1) continue;   // interval overlaps region
+    const k0=slot(Math.max(a[0],REGION.r0)), k1=slot(Math.min(a[1],REGION.r1));
+    for(let k=k0;k<=k1;k++) W(k).alarms.push(a); }
   for(const m of DATA.modes){ if(m[0]<REGION.r0||m[0]>REGION.r1) continue; W(slot(m[0])).modes.push(m); }
   for(const e of DATA.events){ if(e[0]<REGION.r0||e[0]>REGION.r1) continue; W(slot(e[0])).events.push(e); }
   for(const b of DATA.bursts){ if(b[0]<REGION.r0||b[0]>REGION.r1) continue; const w=map.get(slot(b[0])); if(w) w.bursts.push(b); }
@@ -378,7 +380,7 @@ document.getElementById('winsize-apply').addEventListener('click', applyCustomWi
 document.getElementById('winsize-n').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyCustomWin(); } });
 function buildChart(win){
   const svg = document.getElementById('chart-'+win.i);
-  const alarmTypes = [...new Set(win.alarms.map(a=>a[1]))]
+  const alarmTypes = [...new Set(win.alarms.map(a=>a[2]))]
         .sort((a,b)=>Object.keys(DATA.alarmColors).indexOf(a)-Object.keys(DATA.alarmColors).indexOf(b));
   const laneH = alarmTypes.length ? alarmTypes.length*LANE_ROW + 8 : 0;
   const nV = VARS.length;
@@ -397,11 +399,13 @@ function buildChart(win){
   const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PH[k]; };
   const panelsBottom = panelTop(nV-1) + PH[nV-1];
   let parts = [];
-  if(alarmTypes.length){ alarmTypes.forEach((a,r)=>{ const y = TOP + r*LANE_ROW + LANE_ROW/2;
-    const col = DATA.alarmColors[a] || '#888';
-    parts.push(`<text x="${plotL-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${a}</text>`);
-    for(const ev of win.alarms){ if(ev[1]!==a) continue;
-      parts.push(`<rect x="${xOf(ev[0])-1.5}" y="${y-3}" width="3" height="6" fill="${col}"/>`); } }); }
+  if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = TOP + r*LANE_ROW + LANE_ROW/2;
+    const col = DATA.alarmColors[typ] || '#888';
+    parts.push(`<text x="${plotL-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(typ)}</text>`);
+    // one bar per active interval (Activated→Deactivated) of this alarm type
+    for(const ev of win.alarms){ if(ev[2]!==typ) continue;
+      const bx0=Math.max(plotL,xOf(ev[0])), bx1=Math.min(plotR,xOf(ev[1]));
+      parts.push(`<rect x="${bx0.toFixed(1)}" y="${y-3}" width="${Math.max(2,bx1-bx0).toFixed(1)}" height="6" fill="${col}" fill-opacity="0.8"><title>${esc(typ)} · ${fmtTimeS(ev[0])}–${fmtTimeS(ev[1])}</title></rect>`); } }); }
   VARS.forEach((v,k)=>{ const c=COL[v], top=panelTop(k), [mn,mx]=ranges[k];
     parts.push(`<rect x="${plotL}" y="${top}" width="${plotR-plotL}" height="${PH[k]}" fill="${FOCUS===v?'#f7fbff':'none'}" stroke="${FOCUS===v?'#bcdcf5':'#e3e8ee'}"/>`);
     gridVals(mn, mx, PH[k]).forEach(val=>{ const y=yOf(k,val);
@@ -481,14 +485,29 @@ function varAtEvent(i, e){
   return null; }
 
 // ============ event / mode titles under the time axis (selectable + clickable) ============
-function chipHTML(i, t, txt, cls){
+function chipHTML(i, t, txt, cls){   // date shown beside the time
   return `<span class="chip ${cls}" data-i="${i}" data-t="${t}" onclick="pickEvent(this)"`
     + ` title="${esc(txt)} at ${fmtDateTime(t)} — click to put the cursor here">`
-    + `<b>${fmtTimeS(t)}</b>${esc(txt)}</span>`;
+    + `<b>${fmtDate(t)} ${fmtTimeS(t)}</b>${esc(txt)}</span>`;
+}
+function alarmChipHTML(i, a){        // a = [start, end, type]; shows the full active period
+  const col=DATA.alarmColors[a[2]]||'#888';
+  const sameDay = fmtDate(a[0])===fmtDate(a[1]);
+  const endStr = sameDay ? fmtTimeS(a[1]) : (fmtDate(a[1])+' '+fmtTimeS(a[1]));
+  return `<span class="chip" data-i="${i}" data-t="${a[0]}" onclick="pickEvent(this)"`
+    + ` style="border-color:${col};color:${col}"`
+    + ` title="${esc(a[2])} · activated ${fmtDateTime(a[0])} → deactivated ${fmtDateTime(a[1])} (${fmtDur(a[1]-a[0])}) — click to jump">`
+    + `<b style="color:${col}">${fmtDate(a[0])} ${fmtTimeS(a[0])} → ${endStr}</b>`
+    + ` <span style="color:#5b6b7b">${fmtDur(a[1]-a[0])}</span> ${esc(a[2])}</span>`;
 }
 function buildLedger(win){
   const host=document.getElementById('ledger-'+win.i); if(!host) return;
-  let h = `<div class="ledger-h">Events in this window — <b>${win.events.length}</b>`
+  let h = `<div class="ledger-h">Alarms in this window — <b>${win.alarms.length}</b>`
+    + ` · click one to jump to it</div>`;
+  h += `<div class="chips">` + (win.alarms.length
+      ? win.alarms.map(a=>alarmChipHTML(win.i, a)).join('')
+      : `<span class="muted">no alarms in this window</span>`) + `</div>`;
+  h += `<div class="ledger-h" style="margin-top:7px">Events — <b>${win.events.length}</b>`
     + ` · click a title to put the cursor at that moment · the text is selectable</div>`;
   h += `<div class="chips">` + (win.events.length
       ? win.events.map(e=>chipHTML(win.i, e[0], e[1], 'ev')).join('')
@@ -592,11 +611,10 @@ function updateAt(i, t){ const c=CTRL[i], win=c.win; let anchor, lo, hi;
   const cx=document.getElementById('cx-'+i); cx.setAttribute('x1',x); cx.setAttribute('x2',x); cx.setAttribute('visibility','visible');
   document.getElementById('ro-'+i+'-t').textContent = fmtTimeS(anchor);
   const alc=document.getElementById('ro-'+i+'-al');
-  if(alc){ const seen={};
-    for(const a of win.alarms){ if(a[0]>lo && a[0]<=hi) seen[a[1]]=(seen[a[1]]||0)+1; }
-    const types=Object.keys(seen);
-    alc.innerHTML = types.length
-      ? types.map(t=>`<span style="color:${DATA.alarmColors[t]||'#555'}">${esc(t)}${seen[t]>1?' ×'+seen[t]:''}</span>`).join('<br>')
+  if(alc){ const active=[];   // alarms ACTIVE at the cursor (interval contains anchor)
+    for(const a of win.alarms){ if(a[0]<=anchor && anchor<=a[1] && !active.includes(a[2])) active.push(a[2]); }
+    alc.innerHTML = active.length
+      ? active.map(t=>`<span style="color:${DATA.alarmColors[t]||'#555'}">${esc(t)}</span>`).join('<br>')
       : '—';
   }
   const mc=document.getElementById('ro-'+i+'-mode'); if(mc) mc.textContent = modeAt(anchor) || '—';

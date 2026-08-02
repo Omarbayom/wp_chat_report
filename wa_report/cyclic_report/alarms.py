@@ -49,6 +49,67 @@ def load_alarms(source) -> pd.DataFrame:
     )
 
 
+def load_alarm_intervals(source) -> pd.DataFrame:
+    """Pair each alarm's **Activated → Deactivated** rows into active intervals.
+
+    The device logs an alarm as two rows sharing the same ``Alarm`` name with a
+    ``Status`` of ``Activated`` then ``Deactivated``; the alarm is "on" in between.
+    Returns ``DataFrame[Start, End, Alarm]`` (only alarms in ``ALARM_COLORS``).
+
+    Rules:
+      * a ``Deactivated`` with no open ``Activated`` is ignored (orphan);
+      * an alarm still open when an **"EzVent Started Successfully"** row appears
+        (the device restarted after a forced shutdown) is force-closed at that
+        restart time;
+      * anything still open at the end of the log is closed at the last log time;
+      * a re-``Activated`` while already open keeps the earlier start.
+    """
+    empty = pd.DataFrame({"Start": pd.to_datetime([]), "End": pd.to_datetime([]),
+                          "Alarm": pd.Series([], dtype="object")})
+    if source is None:
+        return empty
+    df = read_ventilator_csv(source, "Alarm")
+    if "Alarm" not in df.columns or "Date" not in df.columns:
+        return empty
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df = df.dropna(subset=["DateTime"]).sort_values("DateTime")
+    if df.empty:
+        return empty
+
+    status = (df["Status"].astype(str).str.strip().str.lower()
+              if "Status" in df.columns else pd.Series([""] * len(df), index=df.index))
+    names = df["Alarm"].astype(str).str.strip()
+    is_alarm = df["Alarm"].isin(ALARM_COLORS)
+    is_restart = names.str.lower() == "ezvent started successfully"
+    end_time = df["DateTime"].max()
+
+    active: dict = {}          # alarm name -> start time (still open)
+    rows: List[tuple] = []
+    for dt, alarm, st, isa, isr in zip(df["DateTime"], df["Alarm"], status, is_alarm, is_restart):
+        if isr:                # device restart -> force-close everything still open
+            for typ, t0 in active.items():
+                rows.append((t0, dt, typ))
+            active.clear()
+        elif isa:
+            if st == "activated":
+                active.setdefault(alarm, dt)
+            elif st == "deactivated":
+                if alarm in active:
+                    rows.append((active.pop(alarm), dt, alarm))
+            else:              # alarm row with no Activated/Deactivated -> instant
+                rows.append((dt, dt, alarm))
+    for typ, t0 in active.items():
+        rows.append((t0, end_time, typ))
+
+    if not rows:
+        return empty
+    return (
+        pd.DataFrame(rows, columns=["Start", "End", "Alarm"])
+        .sort_values("Start")
+        .reset_index(drop=True)
+    )
+
+
 def load_log_events(source) -> pd.DataFrame:
     """Read the Log CSV and keep the **non-alarm** rows as events.
 
