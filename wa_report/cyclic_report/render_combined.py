@@ -132,8 +132,12 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
     # last segment is the current patient (preamble); earlier ones get b1/b2/…
     patient_pairs = load_patient_info(cyclic_source)
     add_ms = [_ms(t) for t in load_patient_add_events(alarms_source)]
+    # beginning of the logs = earliest log row of any kind (alarms + events)
+    log_times = [a[0] for a in alarms_flat] + [e[0] for e in events_flat]
+    log_start = min(log_times) if log_times else None
     patients = assemble_roster(patient_pairs, add_ms, list(dts),
-                               [a[0] for a in alarms_flat], t_min, t_max)
+                               [a[0] for a in alarms_flat], t_min, t_max,
+                               log_start=log_start)
 
     payload = {
         "vars": present,

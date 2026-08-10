@@ -239,7 +239,13 @@ function jumpToChat(cid){ if(!cid || !CHAT_HREF) return; window.open(CHAT_HREF +
 </script>
 <script>
 const DATA = JSON.parse(document.getElementById('data').textContent);
-const VB_W = 1000, ML = 70, MR = 16, TOP = 8, PANEL_H = 78, PANEL_GAP = 6, XAXIS_H = 26, LANE_ROW = 14;
+// Each window's X is the cyclic **sample index** (evenly spaced): duplicate
+// timestamps stay distinct and time gaps don't squash the trace. Two X axes are
+// drawn — INDEX on top (cyclic reference), TIME on the bottom (alarm/event
+// reference, mapped onto the index by timestamp). Alarm-only windows have no
+// samples and fall back to a plain time axis.
+const VB_W = 1000, ML = 70, MR = 16, TOP = 8, PANEL_H = 78, PANEL_GAP = 6, XAXIS_H = 40, LANE_ROW = 14;
+const IDX_TOP_H = 20;   // room above the panels for the top INDEX axis
 const ALARM_SNAP_PX = 8;   // cursor within this many px of an alarm snaps onto it
 const ALLVARS = DATA.vars, UNITS = DATA.units;
 // Typical cyclic sampling gap; farther than COVER_TOL from any sample = "no data here".
@@ -320,8 +326,13 @@ function makeWindows(stepMs){
   const align = Math.floor(DATA.tMin/DAY)*DAY + Math.floor((DATA.tMin - Math.floor(DATA.tMin/DAY)*DAY)/step)*step;
   const slot = t => Math.floor((t-align)/step);
   const map = new Map();
-  const W = k => { if(!map.has(k)){ const t0=align+k*step; map.set(k,{k,t0,t1:t0+step,samples:[],alarms:[],bursts:[],modes:[],events:[]}); } return map.get(k); };
-  for(const s of DATA.samples){ if(s[0]<REGION.r0||s[0]>REGION.r1) continue; W(slot(s[0])).samples.push(s); }
+  const W = k => { if(!map.has(k)){ const t0=align+k*step; map.set(k,{k,t0,t1:t0+step,gi0:null,samples:[],alarms:[],bursts:[],modes:[],events:[]}); } return map.get(k); };
+  // iterate with the global index so each window learns its first sample's
+  // absolute index (gi0); window samples are a contiguous global run, so sample
+  // k's log-wide index is gi0+k (used to label the top INDEX axis).
+  for(let gi=0; gi<DATA.samples.length; gi++){ const s=DATA.samples[gi];
+    if(s[0]<REGION.r0||s[0]>REGION.r1) continue; const w=W(slot(s[0]));
+    if(w.gi0==null) w.gi0=gi; w.samples.push(s); }
   for(const a of DATA.alarms){ if(a[1]<REGION.r0||a[0]>REGION.r1) continue;   // interval overlaps region
     const k0=slot(Math.max(a[0],REGION.r0)), k1=slot(Math.min(a[1],REGION.r1));
     for(let k=k0;k<=k1;k++) W(k).alarms.push(a); }
@@ -385,21 +396,36 @@ function buildChart(win){
   const laneH = alarmTypes.length ? alarmTypes.length*LANE_ROW + 8 : 0;
   const nV = VARS.length;
   const PH = panelHeights();                    // focused panel tall, the rest shrunk
-  const H = TOP + laneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + XAXIS_H;
+  const N = win.samples.length, useIdx = N>0;   // index axis only when there's cyclic data
+  const idxTop = useIdx ? IDX_TOP_H : 0;        // top index axis needs headroom
+  const mTop = TOP + idxTop;                    // markers/crosshair start below the index axis
+  const H = TOP + idxTop + laneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + XAXIS_H;
   svg.setAttribute('viewBox', `0 0 ${VB_W} ${H}`);
   const plotL = ML, plotR = VB_W - MR;
-  const xOf = t => plotL + (t-win.t0)/(win.t1-win.t0)*(plotR-plotL);
+  const dur = Math.max(1, win.t1-win.t0);
+  const ST = win.samples.map(s=>s[0]);          // sample times (sorted), index-aligned
+  const gi0 = win.gi0||0;
+  function xOfIdx(k){ return N<=1 ? (plotL+plotR)/2 : plotL + k/(N-1)*(plotR-plotL); }
+  function idxOfTime(t){ if(N<=1) return 0;
+    if(t<=ST[0]) return 0; if(t>=ST[N-1]) return N-1;
+    let lo=0, hi=N-1; while(lo<hi){ const m=(lo+hi+1)>>1; if(ST[m]<=t) lo=m; else hi=m-1; }
+    const span=ST[lo+1]-ST[lo]; return span>0 ? lo+(t-ST[lo])/span : lo; }
+  function timeAtX(px){ if(N===0) return win.t0+Math.max(0,Math.min(1,(px-plotL)/(plotR-plotL)))*dur;
+    if(N===1) return ST[0];
+    const kf=Math.max(0,Math.min(1,(px-plotL)/(plotR-plotL)))*(N-1);
+    const k0=Math.floor(kf), k1=Math.min(N-1,k0+1); return ST[k0]+(ST[k1]-ST[k0])*(kf-k0); }
+  const xOf = useIdx ? (t => xOfIdx(idxOfTime(t))) : (t => plotL + (t-win.t0)/dur*(plotR-plotL));
   const ranges = VARS.map(v=>{ const c=COL[v]; let mn=Infinity, mx=-Infinity;
     for(const s of win.samples){ const y=s[c]; if(y==null) continue; if(y<mn)mn=y; if(y>mx)mx=y; }
     if(mn===Infinity){ mn=0; mx=1; } if(mn===mx){ mn-=1; mx+=1; }
     const pad=(mx-mn)*0.08; return [mn-pad, mx+pad]; });
-  const tops = []; { let y = TOP + laneH;
+  const tops = []; { let y = TOP + idxTop + laneH;
     for(let k=0;k<nV;k++){ tops.push(y); y += PH[k] + PANEL_GAP; } }
   const panelTop = k => tops[k];
   const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PH[k]; };
   const panelsBottom = panelTop(nV-1) + PH[nV-1];
   let parts = [];
-  if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = TOP + r*LANE_ROW + LANE_ROW/2;
+  if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = TOP + idxTop + r*LANE_ROW + LANE_ROW/2;
     const col = DATA.alarmColors[typ] || '#888';
     parts.push(`<text x="${plotL-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(typ)}</text>`);
     // one bar per active interval (Activated→Deactivated) of this alarm type
@@ -418,31 +444,46 @@ function buildChart(win){
       + `<title>${esc(v)} — double-click to ${FOCUS===v?'show all graphs again':'focus this graph'}</title></rect>`);
     let d='', pen=false, col=null; const sw=(FOCUS===v?1.8:1.4);
     const flush=()=>{ if(d) parts.push(`<path d="${d}" fill="none" stroke="${col||'#0a6ebd'}" stroke-width="${sw}"/>`); d=''; pen=false; };
-    for(const s of win.samples){ const val=s[c]; if(val==null){ flush(); continue; }
+    win.samples.forEach((s,si)=>{ const val=s[c]; if(val==null){ flush(); return; }
       const cc=colorAt(s[0]); if(cc!==col){ flush(); col=cc; }
-      const x=xOf(s[0]), y=yOf(k,val); d += (pen?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' '; pen=true; }
+      const x=xOfIdx(si), y=yOf(k,val); d += (pen?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' '; pen=true; });
     flush();
     parts.push(`<line class="hg" id="hg-${win.i}-${k}" x1="${plotL}" x2="${plotR}" y1="0" y2="0" stroke="#c0392b" stroke-width="0.8" stroke-dasharray="4 3" visibility="hidden"/>`);
     parts.push(`<circle class="dot" id="dot-${win.i}-${k}" r="3" fill="#c0392b" visibility="hidden"/>`); });
   const nTicks=6;
-  for(let i=0;i<=nTicks;i++){ const t=win.t0+(win.t1-win.t0)*i/nTicks; const x=xOf(t);
-    parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
-    parts.push(`<text x="${x}" y="${panelsBottom+15}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTimeS(t)}</text>`); }
+  if(useIdx){
+    const topY = TOP + idxTop;
+    parts.push(`<text x="${plotL-6}" y="${topY-4}" text-anchor="end" font-size="8" fill="#0a6ebd" font-weight="bold">#index</text>`);
+    parts.push(`<text x="${plotL-6}" y="${panelsBottom+14}" text-anchor="end" font-size="8" fill="#5b6b7b" font-weight="bold">time</text>`);
+    for(let i=0;i<=nTicks;i++){ const k=Math.round((N-1)*i/nTicks); const x=xOfIdx(k);
+      parts.push(`<line x1="${x}" y1="${topY-3}" x2="${x}" y2="${topY}" stroke="#0a6ebd"/>`);
+      parts.push(`<text x="${x}" y="${topY-5}" text-anchor="middle" font-size="8" fill="#0a6ebd">${gi0+k}</text>`);
+      const t=ST[k]; parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
+      const prevK = Math.round((N-1)*(i-1)/nTicks);
+      const showDate = i===0 || (i>0 && fmtDate(ST[prevK])!==fmtDate(t));
+      parts.push(`<text x="${x}" y="${panelsBottom+14}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTimeS(t)}</text>`);
+      if(showDate) parts.push(`<text x="${x}" y="${panelsBottom+24}" text-anchor="middle" font-size="7.5" fill="#8a97a6">${fmtDate(t)}</text>`);
+    }
+  } else {
+    for(let i=0;i<=nTicks;i++){ const t=win.t0+(win.t1-win.t0)*i/nTicks; const x=xOf(t);
+      parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
+      parts.push(`<text x="${x}" y="${panelsBottom+15}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTimeS(t)}</text>`); }
+  }
   for(const b of win.bursts){ const x=xOf(b[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${panelsBottom}" stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 3"/>`);
-    parts.push(`<text x="${x}" y="${TOP-1}" text-anchor="middle" font-size="8" font-weight="bold" fill="#c0392b">${fmtTime(b[0])}</text>`);
-    parts.push(`<rect class="burst-hit" x="${x-5}" y="${TOP}" width="10" height="${panelsBottom-TOP}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTimeS(b[0])} — click to see in chat</title></rect>`); }
+    parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 3"/>`);
+    parts.push(`<text x="${x}" y="${mTop-1}" text-anchor="middle" font-size="8" font-weight="bold" fill="#c0392b">${fmtTime(b[0])}</text>`);
+    parts.push(`<rect class="burst-hit" x="${x-5}" y="${mTop}" width="10" height="${panelsBottom-mTop}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTimeS(b[0])} — click to see in chat</title></rect>`); }
   let lastMX=-1e9;
   for(const m of win.modes){ const x=xOf(m[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${esc(m[1])} at ${fmtTimeS(m[0])}</title></line>`);
+    parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${esc(m[1])} at ${fmtTimeS(m[0])}</title></line>`);
     if(x-lastMX>46){ parts.push(`<text x="${x+2}" y="${panelsBottom-2}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${esc(m[1])}</text>`); lastMX=x; } }
-  // event ticks: one along the top edge, one just under the time axis so they
+  // event ticks: one along the top edge, one below the time/date axis so they
   // line up with the selectable titles listed below the chart
   for(const e of win.events){ const x=xOf(e[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTimeS(e[0])}</title></line>`);
-    parts.push(`<line x1="${x}" y1="${panelsBottom+18}" x2="${x}" y2="${panelsBottom+25}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTimeS(e[0])}</title></line>`); }
-  parts.push(`<line id="ev-pick-${win.i}" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom+25}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
-  parts.push(`<line class="cx" id="cx-${win.i}" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
+    parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${mTop+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTimeS(e[0])}</title></line>`);
+    parts.push(`<line x1="${x}" y1="${panelsBottom+30}" x2="${x}" y2="${panelsBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTimeS(e[0])}</title></line>`); }
+  parts.push(`<line id="ev-pick-${win.i}" x1="0" x2="0" y1="${mTop}" y2="${panelsBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
+  parts.push(`<line class="cx" id="cx-${win.i}" x1="0" x2="0" y1="${mTop}" y2="${panelsBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
   svg.innerHTML = parts.join('');
   const ro = document.getElementById('readout-'+win.i);
   // Readout lists EVERY present variable — deselecting one only hides its diagram,
@@ -457,7 +498,7 @@ function buildChart(win){
   rows += `<tr><td class="k">Events</td><td class="v al" id="ro-${win.i}-ev">—</td></tr>`;
   rows += `</table><div class="hint" id="hint-${win.i}">hover to read · click to lock · double-click a graph to focus</div>`;
   ro.innerHTML = rows;
-  CTRL[win.i] = { win, svg, xOf, yOf, locked:false, H,
+  CTRL[win.i] = { win, svg, xOf, yOf, xOfIdx, timeAtX, locked:false, H,
     bands: VARS.map((v,k)=>[panelTop(k), panelTop(k)+PH[k], v]),
     alarmT: win.alarms.map(a=>a[0]) };
   svg.addEventListener('mousemove', e=>{ const c=CTRL[win.i]; if(c.locked) return; updateAt(win.i, xToTime(win.i, e)); });
@@ -561,20 +602,22 @@ function buildStats(win){
   host.innerHTML = h;
 }
 function xToTime(i, e){ const c=CTRL[i]; const r=c.svg.getBoundingClientRect();
-  const vbX=(e.clientX-r.left)/r.width*VB_W; const frac=(vbX-ML)/((VB_W-MR)-ML);
-  return c.win.t0 + Math.max(0,Math.min(1,frac))*(c.win.t1-c.win.t0); }
+  const vbX=(e.clientX-r.left)/r.width*VB_W;
+  return c.timeAtX ? c.timeAtX(vbX)
+    : c.win.t0 + Math.max(0,Math.min(1,(vbX-ML)/((VB_W-MR)-ML)))*(c.win.t1-c.win.t0); }
 function nearestMs(arr, t){ let lo=0, hi=arr.length-1; if(hi<0) return -1;
   while(lo<hi){ const m=(lo+hi)>>1; if(arr[m]<t) lo=m+1; else hi=m; }
   if(lo>0 && (t-arr[lo-1])<(arr[lo]-t)) return lo-1; return lo; }
 function updateAt(i, t){ const c=CTRL[i], win=c.win; let anchor, lo, hi;
   if(win.samples && win.samples.length){
-    // magnetic alarm snap so alarms stay reachable even amid dense samples
-    const PW=(VB_W-MR)-ML, TOL=ALARM_SNAP_PX*(win.t1-win.t0)/PW;
+    // pixel-based magnetic alarm snap (the index axis is non-linear in time, so a
+    // fixed time tolerance would misbehave near gaps) — snap within ALARM_SNAP_PX
     const at=c.alarmT; let snap=false, ai=-1;
-    if(at && at.length){ ai=nearestMs(at,t); if(Math.abs(at[ai]-t)<=TOL){ anchor=at[ai]; snap=true; } }
+    if(at && at.length){ ai=nearestMs(at,t);
+      if(Math.abs(c.xOf(at[ai])-c.xOf(t))<=ALARM_SNAP_PX){ anchor=at[ai]; snap=true; } }
     const si=nearest(win.samples, snap?anchor:t); if(si<0) return;
     const s=win.samples[si]; if(!snap) anchor=s[0];
-    const sx=c.xOf(s[0]);
+    const sx=c.xOfIdx ? c.xOfIdx(si) : c.xOf(s[0]);
     // is there actually cyclic data at the anchor? (else values read "—")
     const covered = Math.abs(s[0]-anchor) <= COVER_TOL;
     // values for ALL present variables (readings kept even when the graph is off)

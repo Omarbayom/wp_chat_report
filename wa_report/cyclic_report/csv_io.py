@@ -49,7 +49,28 @@ def read_ventilator_csv(source, key_col: str) -> pd.DataFrame:
 
     Preamble lines above the header are skipped, the delimiter is inferred from
     the header line, and bad (ragged) data rows are dropped rather than raising.
+
+    *source* may also be a **list/tuple of sources** (several uploaded files) —
+    each is read independently (each keeps its own preamble/delimiter) and the
+    rows are concatenated; callers sort by time afterwards, so file order and
+    small column differences don't matter.
     """
+    if isinstance(source, (list, tuple)):
+        frames = [read_ventilator_csv(s, key_col) for s in source]
+        frames = [f for f in frames if f is not None and not f.empty]
+        if not frames:
+            return pd.DataFrame()
+        merged = pd.concat(frames, ignore_index=True, sort=False)
+        # De-overlap: separate exports from one device can share rows where their
+        # time ranges overlap. The device's per-row **Id** is unique, so identical
+        # Ids across files are the SAME row re-exported (not a genuine
+        # repeated-timestamp sample, which carries a different Id) — collapse them,
+        # the **later file winning** (keep="last") so a re-export overrides.
+        if "Id" in merged.columns:
+            merged = merged.drop_duplicates(subset="Id", keep="last")
+        else:
+            merged = merged.drop_duplicates(keep="last")
+        return merged.reset_index(drop=True)
     text = _to_text(source)
     lines = text.splitlines()
 

@@ -415,7 +415,14 @@ function updatePatientBanner(){
   host.innerHTML = patientBannerHTML(seg, note);
 }
 // --- detail chart geometry ---
-const VB_W = 1000, ML = 70, MR = 16, TOP = 8, PANEL_H = 78, PANEL_GAP = 6, XAXIS_H = 26, LANE_ROW = 14;
+// The detail chart's X is the cyclic **sample index** (evenly spaced), so no data
+// is lost to duplicate timestamps and time gaps don't squash the trace. Two X
+// axes are drawn: INDEX on top (the reference for the cyclic data) and TIME on
+// the bottom (the reference for alarms/events, which are mapped onto the index by
+// their timestamp). Alarm-only windows have no samples, so they fall back to a
+// plain time axis.
+const VB_W = 1000, ML = 70, MR = 16, TOP = 8, PANEL_H = 78, PANEL_GAP = 6, XAXIS_H = 40, LANE_ROW = 14;
+const IDX_TOP_H = 20;   // room above the panels for the top INDEX axis
 const ALARM_SNAP_PX = 8;   // cursor within this many px of an alarm snaps onto it
 // Typical cyclic sampling gap (median of consecutive sample diffs). A cursor time
 // farther than COVER_TOL from any sample is treated as "no cyclic data here" — the
@@ -713,7 +720,10 @@ function sliceWindow(t0, t1){
   const bu=DATA.bursts.filter(b=>b[0]>=t0 && b[0]<=t1);
   const mo=DATA.modes.filter(m=>m[0]>=t0 && m[0]<=t1);
   const ev=DATA.events.filter(e=>e[0]>=t0 && e[0]<=t1);
-  return { t0, t1, samples:out, alarms:al, bursts:bu, modes:mo, events:ev };
+  // gi0 = absolute index of the window's first sample in the whole log; window
+  // samples are a contiguous run, so sample k's global index is gi0+k. Used to
+  // label the top INDEX axis with stable, log-wide sample numbers.
+  return { t0, t1, samples:out, gi0:lo, alarms:al, bursts:bu, modes:mo, events:ev };
 }
 function renderDetail(){
   const win = sliceWindow(SEL.t0, SEL.t1);
@@ -744,22 +754,39 @@ function buildChart(win){
   const laneH = alarmTypes.length ? alarmTypes.length*LANE_ROW + 8 : 0;
   const nV = VARS.length;
   const PH = panelHeights();                    // focused panel tall, the rest shrunk
-  const H = TOP + laneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + XAXIS_H;
+  const N = win.samples.length, useIdx = N>0;   // index axis only when there's cyclic data
+  const idxTop = useIdx ? IDX_TOP_H : 0;        // top index axis needs headroom
+  const mTop = TOP + idxTop;                    // markers/crosshair start below the index axis
+  const H = TOP + idxTop + laneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + XAXIS_H;
   svg.setAttribute('viewBox', `0 0 ${VB_W} ${H}`);
   const plotL = ML, plotR = VB_W - MR;
   const dur = Math.max(1, win.t1-win.t0);
-  const xOf = t => plotL + (t-win.t0)/dur*(plotR-plotL);
+  const ST = win.samples.map(s=>s[0]);          // sample times (sorted), index-aligned
+  // index axis: sample k sits at even spacing; a time maps to a fractional index
+  // (interpolating within gaps → alarms/events land in time between the cyclic
+  // points that bracket them). Equal timestamps share an index (0-width span).
+  function xOfIdx(k){ return N<=1 ? (plotL+plotR)/2 : plotL + k/(N-1)*(plotR-plotL); }
+  function idxOfTime(t){ if(N<=1) return 0;
+    if(t<=ST[0]) return 0; if(t>=ST[N-1]) return N-1;
+    let lo=0, hi=N-1; while(lo<hi){ const m=(lo+hi+1)>>1; if(ST[m]<=t) lo=m; else hi=m-1; }
+    const span=ST[lo+1]-ST[lo]; return span>0 ? lo+(t-ST[lo])/span : lo; }
+  function timeAtX(px){ if(N===0) return win.t0+Math.max(0,Math.min(1,(px-plotL)/(plotR-plotL)))*dur;
+    if(N===1) return ST[0];
+    const kf=Math.max(0,Math.min(1,(px-plotL)/(plotR-plotL)))*(N-1);
+    const k0=Math.floor(kf), k1=Math.min(N-1,k0+1); return ST[k0]+(ST[k1]-ST[k0])*(kf-k0); }
+  // time→pixel: index-mapped when there's cyclic data, else plain time-linear
+  const xOf = useIdx ? (t => xOfIdx(idxOfTime(t))) : (t => plotL + (t-win.t0)/dur*(plotR-plotL));
   const ranges = VARS.map(v=>{ const c=COL[v]; let mn=Infinity, mx=-Infinity;
     for(const s of win.samples){ const y=s[c]; if(y==null) continue; if(y<mn)mn=y; if(y>mx)mx=y; }
     if(mn===Infinity){ mn=0; mx=1; } if(mn===mx){ mn-=1; mx+=1; }
     const pad=(mx-mn)*0.08; return [mn-pad, mx+pad]; });
-  const tops = []; { let y = TOP + laneH;
+  const tops = []; { let y = TOP + idxTop + laneH;
     for(let k=0;k<nV;k++){ tops.push(y); y += PH[k] + PANEL_GAP; } }
   const panelTop = k => tops[k];
   const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PH[k]; };
   const panelsBottom = panelTop(nV-1) + PH[nV-1];
   let parts = [];
-  if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = TOP + r*LANE_ROW + LANE_ROW/2;
+  if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = TOP + idxTop + r*LANE_ROW + LANE_ROW/2;
     const col = DATA.alarmColors[typ] || '#888';
     parts.push(`<text x="${plotL-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(typ)}</text>`);
     // one bar per active interval (Activated→Deactivated) of this alarm type
@@ -778,32 +805,52 @@ function buildChart(win){
       + `<title>${esc(v)} — double-click to ${FOCUS===v?'show all graphs again':'focus this graph'}</title></rect>`);
     let d='', pen=false, col=null; const sw=(FOCUS===v?1.8:1.4);
     const flush=()=>{ if(d) parts.push(`<path d="${d}" fill="none" stroke="${col||'#0a6ebd'}" stroke-width="${sw}"/>`); d=''; pen=false; };
-    for(const s of win.samples){ const val=s[c]; if(val==null){ flush(); continue; }
+    win.samples.forEach((s,si)=>{ const val=s[c]; if(val==null){ flush(); return; }
       const cc=colorAt(s[0]); if(cc!==col){ flush(); col=cc; }
-      const x=xOf(s[0]), y=yOf(k,val); d += (pen?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' '; pen=true; }
+      const x=xOfIdx(si), y=yOf(k,val); d += (pen?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' '; pen=true; });
     flush();
     parts.push(`<line class="hg" id="hg-d-${k}" x1="${plotL}" x2="${plotR}" y1="0" y2="0" stroke="#c0392b" stroke-width="0.8" stroke-dasharray="4 3" visibility="hidden"/>`);
     parts.push(`<circle class="dot" id="dot-d-${k}" r="3" fill="#c0392b" visibility="hidden"/>`); });
   const nTicks=6;
-  for(let i=0;i<=nTicks;i++){ const t=win.t0+dur*i/nTicks; const x=xOf(t);
-    parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
-    parts.push(`<text x="${x}" y="${panelsBottom+15}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTime(t)}</text>`); }
+  if(useIdx){
+    // ticks sit at even INDEX positions; each carries its sample number (top)
+    // and that sample's wall-clock time (bottom) — so a big time jump between two
+    // adjacent ticks visibly reveals a cyclic gap.
+    const topY = TOP + idxTop;
+    parts.push(`<text x="${plotL-6}" y="${topY-4}" text-anchor="end" font-size="8" fill="#0a6ebd" font-weight="bold">#index</text>`);
+    parts.push(`<text x="${plotL-6}" y="${panelsBottom+14}" text-anchor="end" font-size="8" fill="#5b6b7b" font-weight="bold">time</text>`);
+    for(let i=0;i<=nTicks;i++){ const k=Math.round((N-1)*i/nTicks); const x=xOfIdx(k);
+      // top index axis
+      parts.push(`<line x1="${x}" y1="${topY-3}" x2="${x}" y2="${topY}" stroke="#0a6ebd"/>`);
+      parts.push(`<text x="${x}" y="${topY-5}" text-anchor="middle" font-size="8" fill="#0a6ebd">${win.gi0+k}</text>`);
+      // bottom time axis (date shown on the first tick and whenever the day rolls)
+      const t=ST[k]; parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
+      const prevK = Math.round((N-1)*(i-1)/nTicks);
+      const showDate = i===0 || (i>0 && fmtDate(ST[prevK])!==fmtDate(t));
+      parts.push(`<text x="${x}" y="${panelsBottom+14}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTime(t)}</text>`);
+      if(showDate) parts.push(`<text x="${x}" y="${panelsBottom+24}" text-anchor="middle" font-size="7.5" fill="#8a97a6">${fmtDate(t)}</text>`);
+    }
+  } else {
+    for(let i=0;i<=nTicks;i++){ const t=win.t0+dur*i/nTicks; const x=xOf(t);
+      parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
+      parts.push(`<text x="${x}" y="${panelsBottom+15}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTime(t)}</text>`); }
+  }
   for(const b of win.bursts){ const x=xOf(b[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${panelsBottom}" stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 3"/>`);
-    parts.push(`<text x="${x}" y="${TOP-1}" text-anchor="middle" font-size="8" font-weight="bold" fill="#c0392b">${fmtHM(b[0])}</text>`);
-    parts.push(`<rect class="burst-hit" x="${x-5}" y="${TOP}" width="10" height="${panelsBottom-TOP}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTime(b[0])} — click to see in chat</title></rect>`); }
+    parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 3"/>`);
+    parts.push(`<text x="${x}" y="${mTop-1}" text-anchor="middle" font-size="8" font-weight="bold" fill="#c0392b">${fmtHM(b[0])}</text>`);
+    parts.push(`<rect class="burst-hit" x="${x-5}" y="${mTop}" width="10" height="${panelsBottom-mTop}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTime(b[0])} — click to see in chat</title></rect>`); }
   // mode changes: purple dashed line at each change; label only where there's room
   let lastMX=-1e9;
   for(const m of win.modes){ const x=xOf(m[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${esc(m[1])} at ${fmtTime(m[0])}</title></line>`);
+    parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${esc(m[1])} at ${fmtTime(m[0])}</title></line>`);
     if(x-lastMX>46){ parts.push(`<text x="${x+2}" y="${panelsBottom-2}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${esc(m[1])}</text>`); lastMX=x; } }
-  // settings/data-change events: teal ticks along the top, plus a tick just under
-  // the time axis that lines up with the titles listed below the chart
+  // settings/data-change events: teal ticks along the top, plus a tick below the
+  // time/date axis that lines up with the titles listed below the chart
   for(const e of win.events){ const x=xOf(e[0]);
-    parts.push(`<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`);
-    parts.push(`<line x1="${x}" y1="${panelsBottom+18}" x2="${x}" y2="${panelsBottom+25}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`); }
-  parts.push(`<line id="ev-pick-d" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom+25}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
-  parts.push(`<line class="cx" id="cx-d" x1="0" x2="0" y1="${TOP}" y2="${panelsBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
+    parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${mTop+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`);
+    parts.push(`<line x1="${x}" y1="${panelsBottom+30}" x2="${x}" y2="${panelsBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`); }
+  parts.push(`<line id="ev-pick-d" x1="0" x2="0" y1="${mTop}" y2="${panelsBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
+  parts.push(`<line class="cx" id="cx-d" x1="0" x2="0" y1="${mTop}" y2="${panelsBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
   svg.innerHTML = parts.join('');
   const ro = document.getElementById('readout-d');
   // Readout lists EVERY present variable — deselecting one in the Y-axis picker
@@ -819,6 +866,7 @@ function buildChart(win){
   rows += `</table><div class="hint" id="hint-d">hover to read · click to lock · double-click a graph to focus</div>`;
   ro.innerHTML = rows;
   CTRL.win=win; CTRL.svg=svg; CTRL.xOf=xOf; CTRL.yOf=yOf; CTRL.H=H;
+  CTRL.xOfIdx=xOfIdx; CTRL.timeAtX=timeAtX;   // index→px and px→time (index-aware)
   CTRL.bands=VARS.map((v,k)=>[panelTop(k), panelTop(k)+PH[k], v]);
   CTRL.alarmT=win.alarms.map(a=>a[0]);   // alarm times, for magnetic cursor snap
   svg.addEventListener('mousemove', e=>{ if(CTRL.locked) return; updateAt(xToTime(e)); });
@@ -917,8 +965,9 @@ function buildStats(win){
     + statsTableHTML(win);
 }
 function xToTime(e){ const r=CTRL.svg.getBoundingClientRect();
-  const vbX=(e.clientX-r.left)/r.width*VB_W; const frac=(vbX-ML)/((VB_W-MR)-ML);
-  return CTRL.win.t0 + Math.max(0,Math.min(1,frac))*(CTRL.win.t1-CTRL.win.t0); }
+  const vbX=(e.clientX-r.left)/r.width*VB_W;
+  return CTRL.timeAtX ? CTRL.timeAtX(vbX)
+    : CTRL.win.t0 + Math.max(0,Math.min(1,(vbX-ML)/((VB_W-MR)-ML)))*(CTRL.win.t1-CTRL.win.t0); }
 // nearest index in a plain sorted ms array
 function nearestMs(arr, t){ let lo=0, hi=arr.length-1; if(hi<0) return -1;
   while(lo<hi){ const m=(lo+hi)>>1; if(arr[m]<t) lo=m+1; else hi=m; }
@@ -930,12 +979,15 @@ function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
     // magnetic alarm snap: if the cursor is within ALARM_SNAP_PX of an alarm,
     // anchor to that alarm so alarms stay reachable even amid dense samples.
     // *exact* (from the time-search / arrow keys) disables the magnet.
-    const PW=(VB_W-MR)-ML, TOL=ALARM_SNAP_PX*(win.t1-win.t0)/PW;
+    // pixel-based magnet: snap onto an alarm when it's within ALARM_SNAP_PX of the
+    // cursor. Distance is measured in pixels (via xOf) because the index axis is
+    // non-linear in time, so a fixed time tolerance would misbehave near gaps.
     const at=CTRL.alarmT; let snap=false, ai=-1;
-    if(!exact && at && at.length){ ai=nearestMs(at,t); if(Math.abs(at[ai]-t)<=TOL){ anchor=at[ai]; snap=true; } }
+    if(!exact && at && at.length){ ai=nearestMs(at,t);
+      if(Math.abs(CTRL.xOf(at[ai])-CTRL.xOf(t))<=ALARM_SNAP_PX){ anchor=at[ai]; snap=true; } }
     const si=nearest(win.samples, snap?anchor:t); if(si<0) return;
     const s=win.samples[si]; if(!snap) anchor=s[0];
-    const sx=CTRL.xOf(s[0]);
+    const sx=CTRL.xOfIdx ? CTRL.xOfIdx(si) : CTRL.xOf(s[0]);
     // is there actually cyclic data at the anchor? (else values read "—")
     const covered = Math.abs(s[0]-anchor) <= COVER_TOL;
     // values for ALL present variables (readings kept even when the graph is off)

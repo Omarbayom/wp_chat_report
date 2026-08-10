@@ -20,7 +20,7 @@ from typing import List, Optional
 
 import pandas as pd
 
-from .alarms import load_alarms, load_patient_add_events
+from .alarms import load_alarms, load_log_events, load_patient_add_events
 from .config import VARIABLE_UNITS
 from .data_loader import load_cyclic
 from .patient import PATIENT_FIELDS, load_patient_info, patient_title
@@ -42,17 +42,37 @@ def _count_in(sorted_ms: List[int], a: int, b: int) -> int:
     return bisect.bisect_left(sorted_ms, b) - bisect.bisect_left(sorted_ms, a)
 
 
-def assemble_roster(preamble, add_ms, sample_ms, alarm_ms, t_min, t_max) -> List[dict]:
+def assemble_roster(preamble, add_ms, sample_ms, alarm_ms, t_min, t_max,
+                    log_start=None) -> List[dict]:
     """Build the per-patient roster (pure computation, no I/O).
 
     *preamble* = the current patient's ``[(label,value)]`` (may be empty). *add_ms*
     = ``Add New Patient`` times. *sample_ms* / *alarm_ms* = ascending ms arrays.
-    Returns a list of segment dicts (chronological); empty when there is nothing
-    to show (a single unnamed patient with no handovers)."""
+    *log_start* = first log-entry time (falls back to ``alarm_ms[0]``).
+
+    A new patient segment **begins** at any of three events:
+      1. an ``Add New Patient`` log row (a handover);
+      2. the **beginning of the logs** (first log entry);
+      3. the **beginning of the cyclic data** (first cyclic sample).
+
+    So the pre-cyclic, alarm-only stretch and the first cyclic patient become
+    separate segments even without an explicit handover between them. Returns a
+    list of segment dicts (chronological); empty when there is nothing to split
+    (a single unnamed patient, one continuous start)."""
     add_ms = sorted(m for m in add_ms if t_min < m < t_max)
-    if not add_ms and not preamble:
+    # segment start points (deduped, inside the timeline) — the 3 conditions
+    starts = {t_min}
+    if log_start is None and alarm_ms:
+        log_start = alarm_ms[0]
+    if log_start is not None and t_min <= log_start < t_max:
+        starts.add(log_start)                         # 2. beginning of the logs
+    if sample_ms and t_min <= sample_ms[0] < t_max:
+        starts.add(sample_ms[0])                      # 3. beginning of the cyclic data
+    starts.update(add_ms)                             # 1. Add New Patient handovers
+    starts = sorted(starts)
+    if len(starts) <= 1 and not add_ms and not preamble:
         return []
-    edges = [t_min] + add_ms + [t_max]
+    edges = starts + [t_max]
     raw = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1) if edges[i + 1] > edges[i]]
     if not raw:
         return []
@@ -96,8 +116,15 @@ def build_roster(cyclic_source, alarms_source=None) -> List[dict]:
     alarms = load_alarms(alarms_source) if alarms_source is not None else None
     alarm_ms = (sorted(_ms(t) for t in alarms["DateTime"])
                 if alarms is not None and not alarms.empty else [])
-    universe = sample_ms + alarm_ms + add_ms
+    # beginning of the logs = the earliest log row of ANY kind (alarms + events,
+    # where events already include the "Add New Patient" rows)
+    events = load_log_events(alarms_source) if alarms_source is not None else None
+    event_ms = (sorted(_ms(t) for t in events["DateTime"])
+                if events is not None and not events.empty else [])
+    log_ms = alarm_ms + event_ms
+    log_start = min(log_ms) if log_ms else None
+    universe = sample_ms + alarm_ms + add_ms + event_ms
     if not universe:
         return []
     return assemble_roster(preamble, add_ms, sample_ms, alarm_ms,
-                           min(universe), max(universe))
+                           min(universe), max(universe), log_start=log_start)

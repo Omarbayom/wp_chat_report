@@ -44,8 +44,11 @@ def load_modes(source) -> List[Tuple["pd.Timestamp", str]]:
 def load_cyclic(source, variables: Sequence[str]) -> Tuple[pd.DataFrame, List[str]]:
     """Read a cyclic CSV (path or file-like) and keep DateTime + *variables*.
 
-    Duplicate timestamps are averaged (the device sometimes logs several rows per
-    minute). Returns (dataframe, missing_variable_names).
+    **Every raw row is kept** — repeated timestamps are NOT averaged/collapsed, so
+    each acquisition becomes its own point on the index axis (rows the device
+    logged at the same second sit side by side rather than being merged into one).
+    Rows are stable-sorted by ``DateTime`` so equal timestamps keep their original
+    (acquisition) order. Returns (dataframe, missing_variable_names).
     """
     df = read_ventilator_csv(source, "DateTime")
     if "DateTime" not in df.columns:
@@ -74,9 +77,7 @@ def load_cyclic(source, variables: Sequence[str]) -> Tuple[pd.DataFrame, List[st
 
     df = (
         df[["DateTime", *present]]
-        .groupby("DateTime", as_index=False)
-        .mean(numeric_only=True)
-        .sort_values("DateTime")
+        .sort_values("DateTime", kind="stable")
         .reset_index(drop=True)
     )
     return df, missing

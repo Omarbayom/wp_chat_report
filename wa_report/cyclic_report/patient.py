@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from .csv_io import _to_text
+from .csv_io import _to_text, parse_datetimes, read_ventilator_csv
 
 # The fields we surface, in display order.
 PATIENT_FIELDS = ["Patient ID", "Patient Name", "Patient Age",
@@ -37,10 +37,36 @@ def _esc(s) -> str:
     return _html.escape(str(s if s is not None else ""), quote=True)
 
 
+def _latest_time(source):
+    """The latest ``DateTime`` in one cyclic source, or ``None`` if unreadable."""
+    try:
+        d = read_ventilator_csv(source, "DateTime")
+        if "DateTime" not in d.columns:
+            return None
+        t = parse_datetimes(d["DateTime"], dayfirst=True).max()
+        return None if t is None or t != t else t   # drop NaT
+    except Exception:
+        return None
+
+
 def load_patient_info(source) -> Pairs:
     """Read the CyclicData preamble and return the patient fields present, as
     ordered ``(label, value)`` pairs. Empty list when the source can't be read or
-    carries no patient rows (so callers can treat "no patient info" uniformly)."""
+    carries no patient rows (so callers can treat "no patient info" uniformly).
+
+    When *source* is a **list** of cyclic files, the preamble of the file whose
+    data ends **latest** is returned — that is the current patient (matching how
+    the roster picks the last time-segment)."""
+    if isinstance(source, (list, tuple)):
+        best, best_t = [], None
+        for s in source:
+            info = load_patient_info(s)
+            if not info:
+                continue
+            t = _latest_time(s)
+            if not best or (t is not None and (best_t is None or t > best_t)):
+                best, best_t = info, t
+        return best
     try:
         text = _to_text(source)
     except Exception:

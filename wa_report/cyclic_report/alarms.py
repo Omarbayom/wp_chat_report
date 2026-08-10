@@ -59,8 +59,11 @@ def load_alarm_intervals(source) -> pd.DataFrame:
     Rules:
       * a ``Deactivated`` with no open ``Activated`` is ignored (orphan);
       * an alarm still open when an **"EzVent Started Successfully"** row appears
-        (the device restarted after a forced shutdown) is force-closed at that
-        restart time;
+        (the device restarted after a forced shutdown) is force-closed at the
+        **last logged row of the session that is ending** — i.e. when the device
+        actually stopped logging, not at the restart itself (which can follow a
+        long device-off gap). This keeps an alarm bar from spanning the dead
+        period between a forced shutdown and the next start-up;
       * anything still open at the end of the log is closed at the last log time;
       * a re-``Activated`` while already open keeps the earlier start.
     """
@@ -72,7 +75,9 @@ def load_alarm_intervals(source) -> pd.DataFrame:
     if "Alarm" not in df.columns or "Date" not in df.columns:
         return empty
     df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
-    df = df.dropna(subset=["DateTime"]).sort_values("DateTime")
+    # stable sort so same-second rows keep their in-file order — deterministic
+    # even when several log files are stitched together (multi-file upload)
+    df = df.dropna(subset=["DateTime"]).sort_values("DateTime", kind="stable")
     if df.empty:
         return empty
 
@@ -85,10 +90,14 @@ def load_alarm_intervals(source) -> pd.DataFrame:
 
     active: dict = {}          # alarm name -> start time (still open)
     rows: List[tuple] = []
+    prev_dt = None             # timestamp of the previous log row (the session's last)
     for dt, alarm, st, isa, isr in zip(df["DateTime"], df["Alarm"], status, is_alarm, is_restart):
-        if isr:                # device restart -> force-close everything still open
+        if isr:                # device restart -> close open alarms at the ending
+            # session's LAST logged row (prev_dt), not at the restart time, so the
+            # bar doesn't stretch across the device-off gap before this start-up.
+            close_t = prev_dt if prev_dt is not None else dt
             for typ, t0 in active.items():
-                rows.append((t0, dt, typ))
+                rows.append((t0, max(t0, close_t), typ))
             active.clear()
         elif isa:
             if st == "activated":
@@ -98,6 +107,7 @@ def load_alarm_intervals(source) -> pd.DataFrame:
                     rows.append((active.pop(alarm), dt, alarm))
             else:              # alarm row with no Activated/Deactivated -> instant
                 rows.append((dt, dt, alarm))
+        prev_dt = dt           # remember this row as the session's last-so-far
     for typ, t0 in active.items():
         rows.append((t0, end_time, typ))
 
