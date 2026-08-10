@@ -215,6 +215,8 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   header a.other { color:#fff; background:rgba(255,255,255,.18); padding:6px 12px;
     border-radius:8px; text-decoration:none; font-size:13px; }
   header a.other:hover { background:rgba(255,255,255,.32); }
+  header button.other { font:inherit; border:none; cursor:pointer; }
+  header button.other:disabled { opacity:.6; cursor:default; }
   .stats { display:flex; gap:8px; flex-wrap:wrap; padding:10px 20px 0; }
   .stat { background:#fff; border:1px solid #e3e8ee; border-radius:9px; padding:6px 12px; }
   .stat b { color:#0a6ebd; font-size:16px; } .stat span { color:#5b6b7b; font-size:11px; }
@@ -287,6 +289,7 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
 </style></head><body>
 <header><h1>__DEVICE__</h1><div class="sub">set a range to zoom · drag the window inside · hover to read · click to lock · double-click a graph to focus it</div>
   <div class="ctl">
+    <button class="other" type="button" id="ss-btn" title="Save the current window as two images: a wide diagram, and the alarms/events for this window">📷 Save images</button>
     <a class="other" href="__WINDOWSHREF__" target="wa_windows">Windowed view ↗</a>
     __CHATLINK__
   </div></header>
@@ -732,7 +735,7 @@ function renderDetail(){
   if(!win.samples.length && !win.alarms.length && !win.modes.length && !win.events.length){
     host.innerHTML = `<div class="card"><div class="card-h">${title}</div>`
       +`<p class="muted">No cyclic data or alarms in this window — drag a wider window on the overview above.</p></div>`;
-    CTRL.win=win; return;
+    CTRL.win=win; CTRL.hasChart=false; return;
   }
   const badge = win.samples.length
     ? `<span class="lock-badge" id="lock-d" hidden>🔒 locked</span>`
@@ -746,6 +749,7 @@ function renderDetail(){
   buildChart(win);
   buildLedger(win);
   buildStats(win);
+  CTRL.hasChart=true;
 }
 function buildChart(win){
   const svg = document.getElementById('chart-d');
@@ -934,6 +938,136 @@ function pickEvent(el){
     pk.setAttribute('x1',x); pk.setAttribute('x2',x); pk.setAttribute('visibility','visible'); }
   lockAt(t, true);
 }
+
+// ============ save the current window as two PNGs (📷 Save images) ============
+// Two self-contained images (no CDN/libs — matches the rest of this page): a
+// WIDE render of the diagram panels (same data, stretched to a fixed wide
+// pixel width so it stays readable when shared), and a plain-text list of the
+// alarms + events active in the same window. Both go SVG string -> Blob ->
+// Image -> canvas -> PNG blob -> <a download>, never foreignObject (keeps the
+// canvas untainted so toBlob works).
+const SS_WIDE_SCALE = 1.8;      // how much wider than the on-screen chart
+const SS_FONT = 'Segoe UI, Arial, sans-serif';
+function clip(s, n){ s = String(s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function svgToPngBlob(svgMarkup, w, h){
+  return new Promise((resolve, reject)=>{
+    const blob = new Blob([svgMarkup], {type:'image/svg+xml;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error('canvas.toBlob returned null')), 'image/png');
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('could not rasterize the SVG')); };
+    img.src = url;
+  });
+}
+function downloadBlob(blob, filename){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function ssStamp(win){ return fmtDate(win.t0).replace(/\//g,'-') + '_' + fmtTime(win.t0).replace(/:/g,''); }
+// image 1: the diagram panels, same content as #chart-d, rendered SS_WIDE_SCALE
+// times wider (uniform scale, so nothing distorts — just a bigger, wider image
+// than the narrow container the live page may be showing it in).
+function buildWideChartSVG(win){
+  const w = Math.round(VB_W * SS_WIDE_SCALE), h = Math.round(CTRL.H * SS_WIDE_SCALE);
+  const TITLE_H = 36;
+  const device = (document.querySelector('header h1') || {}).textContent || '';
+  const title = `${device} — cyclic diagram — ${fmtDateTime(win.t0)} → ${fmtDateTime(win.t1)}`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h + TITLE_H}">`
+    + `<rect width="100%" height="100%" fill="#ffffff"/>`
+    + `<text x="14" y="24" font-family="${SS_FONT}" font-size="18" font-weight="bold" fill="#0a6ebd">${esc(title)}</text>`
+    + `<line x1="0" y1="${TITLE_H - 1}" x2="${w}" y2="${TITLE_H - 1}" stroke="#e3e8ee"/>`
+    + `<svg x="0" y="${TITLE_H}" width="${w}" height="${h}" viewBox="0 0 ${VB_W} ${CTRL.H}">${CTRL.svg.innerHTML}</svg>`
+    + `</svg>`;
+  return {svg, w, h: h + TITLE_H};
+}
+// image 2: alarms + events active in the same window, as a plain readable list
+// (own colour swatch per alarm type, matching the on-page ledger's colours).
+function buildAlarmEventsSVG(win){
+  const W = 1200, PAD = 18, LINE_H = 20, CAP = 100;
+  const device = (document.querySelector('header h1') || {}).textContent || '';
+  const parts = [];
+  let y = PAD + 6;
+  parts.push(`<text x="${PAD}" y="${y}" font-family="${SS_FONT}" font-size="18" font-weight="bold" fill="#0a6ebd">`
+    + `${esc(device)} — Alarms &amp; Events — ${esc(fmtDateTime(win.t0))} → ${esc(fmtDateTime(win.t1))}</text>`);
+  y += 30;
+  parts.push(`<text x="${PAD}" y="${y}" font-family="${SS_FONT}" font-size="14" font-weight="bold" fill="#1d2733">Alarms (${win.alarms.length})</text>`);
+  y += LINE_H;
+  const alarms = win.alarms.slice(0, CAP);
+  if(!alarms.length){
+    parts.push(`<text x="${PAD + 10}" y="${y}" font-family="${SS_FONT}" font-size="12.5" font-style="italic" fill="#5b6b7b">no alarms in this window</text>`);
+    y += LINE_H;
+  } else {
+    for(const a of alarms){
+      const col = DATA.alarmColors[a[2]] || '#888';
+      const sameDay = fmtDate(a[0]) === fmtDate(a[1]);
+      const endStr = sameDay ? fmtTime(a[1]) : (fmtDate(a[1]) + ' ' + fmtTime(a[1]));
+      const line = `${fmtDate(a[0])} ${fmtTime(a[0])} → ${endStr}  (${fmtDur(a[1] - a[0]).trim()})   ${a[2]}`;
+      parts.push(`<rect x="${PAD}" y="${y - 10}" width="9" height="9" fill="${col}"/>`);
+      parts.push(`<text x="${PAD + 15}" y="${y}" font-family="${SS_FONT}" font-size="12.5" fill="#1d2733">${esc(clip(line, 130))}</text>`);
+      y += LINE_H;
+    }
+    if(win.alarms.length > CAP){
+      parts.push(`<text x="${PAD + 15}" y="${y}" font-family="${SS_FONT}" font-size="12" font-style="italic" fill="#5b6b7b">+${win.alarms.length - CAP} more not shown</text>`);
+      y += LINE_H;
+    }
+  }
+  y += 12;
+  parts.push(`<text x="${PAD}" y="${y}" font-family="${SS_FONT}" font-size="14" font-weight="bold" fill="#1d2733">Events (${win.events.length})</text>`);
+  y += LINE_H;
+  const events = win.events.slice(0, CAP);
+  if(!events.length){
+    parts.push(`<text x="${PAD + 10}" y="${y}" font-family="${SS_FONT}" font-size="12.5" font-style="italic" fill="#5b6b7b">no logged events in this window</text>`);
+    y += LINE_H;
+  } else {
+    for(const e of events){
+      const line = `${fmtDate(e[0])} ${fmtTime(e[0])}   ${e[1]}`;
+      parts.push(`<rect x="${PAD}" y="${y - 10}" width="9" height="9" fill="${EVENT_COLOR}"/>`);
+      parts.push(`<text x="${PAD + 15}" y="${y}" font-family="${SS_FONT}" font-size="12.5" fill="#1d2733">${esc(clip(line, 130))}</text>`);
+      y += LINE_H;
+    }
+    if(win.events.length > CAP){
+      parts.push(`<text x="${PAD + 15}" y="${y}" font-family="${SS_FONT}" font-size="12" font-style="italic" fill="#5b6b7b">+${win.events.length - CAP} more not shown</text>`);
+      y += LINE_H;
+    }
+  }
+  const H = y + PAD;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">`
+    + `<rect width="100%" height="100%" fill="#ffffff"/>` + parts.join('') + `</svg>`;
+  return {svg, w: W, h: H};
+}
+async function saveScreenshots(){
+  const win = CTRL.win;
+  const btn = document.getElementById('ss-btn');
+  if(!win || !CTRL.hasChart){ alert('Nothing to save — this window has no chart (drag a wider window on the overview above).'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  try{
+    const stamp = ssStamp(win);
+    const wide = buildWideChartSVG(win);
+    const blob1 = await svgToPngBlob(wide.svg, wide.w, wide.h);
+    downloadBlob(blob1, `cyclic_diagram_${stamp}.png`);
+    const ae = buildAlarmEventsSVG(win);
+    const blob2 = await svgToPngBlob(ae.svg, ae.w, ae.h);
+    // small gap so the browser reliably fires both downloads
+    await new Promise(r => setTimeout(r, 300));
+    downloadBlob(blob2, `alarms_events_${stamp}.png`);
+  } catch(err){
+    console.error(err);
+    alert('Could not build the screenshot(s): ' + err.message);
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '📷 Save images'; }
+  }
+}
+document.getElementById('ss-btn').addEventListener('click', saveScreenshots);
 
 // ============================ window statistics ============================
 function fmtNum(x){ if(x==null || !isFinite(x)) return '—';
