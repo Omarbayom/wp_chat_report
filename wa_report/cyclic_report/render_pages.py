@@ -248,6 +248,7 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .card-h { font-size:14px; font-weight:600; color:#0a6ebd; margin:2px 0 6px; }
   .lock-badge { font-size:11px; color:#c0392b; margin-left:8px; font-weight:600; }
   .alarm-only { font-size:11px; color:#8a5b00; margin-left:8px; font-weight:600; }
+  .sep-note { font-size:11px; color:#a05a00; margin-left:8px; font-weight:600; }
   .chart-row { display:flex; gap:10px; align-items:flex-start; }
   svg.chart { flex:1 1 auto; width:100%; height:auto; cursor:crosshair; user-select:none; }
   .readout { flex:0 0 160px; font-size:12px; }
@@ -373,8 +374,17 @@ const COL = {}; ALLVARS.forEach((v,i)=>{ COL[v]=i+1; });
 let VARS = (DATA.defaultVars && DATA.defaultVars.length ? DATA.defaultVars : ALLVARS).slice();
 let OVVAR = (DATA.defaultVars && DATA.defaultVars[0]) || ALLVARS[0];   // overview trend variable
 const MODE_COLOR = '#6f42c1', EVENT_COLOR = '#0aa3a3';                 // modes / events
+const SEP_COLOR = '#d98c00';   // cyclic-data-begins separator (before/after alarm log)
 const HOUR = 3600000;
 function modeAt(t){ let m=null; for(const md of DATA.modes){ if(md[0]<=t) m=md[1]; else break; } return m; }
+// alarm-limit settings active at time t (the most recent "Alarm Limits Change"
+// snapshot at or before t) — {var: [min_or_null, max_or_null], ...} or null.
+function limitsAt(t){ let L=null; for(const s of DATA.limits){ if(s[0]<=t) L=s[1]; else break; } return L; }
+function fmtLimit(p){ if(!p) return '—'; const [mn,mx]=p;
+  if(mn!=null && mx!=null) return mn+'–'+mx;
+  if(mx!=null) return '≤'+mx;
+  if(mn!=null) return '≥'+mn;
+  return '—'; }
 function setOvVar(v){ OVVAR=v; buildOverview(); }
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -426,6 +436,10 @@ function updatePatientBanner(){
 // plain time axis.
 const VB_W = 1000, ML = 70, MR = 16, TOP = 8, PANEL_H = 78, PANEL_GAP = 6, XAXIS_H = 40, LANE_ROW = 14;
 const IDX_TOP_H = 20;   // room above the panels for the top INDEX axis
+// "Before" strip: when cyclic data starts partway through a window, this many
+// px on the left (before the main plot) is given its own linear time axis for
+// the pre-cyclic alarm/event history — otherwise it collapses to one pixel.
+const BEFORE_W = 60, BEFORE_GAP = 44;
 const ALARM_SNAP_PX = 8;   // cursor within this many px of an alarm snaps onto it
 // Typical cyclic sampling gap (median of consecutive sample diffs). A cursor time
 // farther than COVER_TOL from any sample is treated as "no cyclic data here" — the
@@ -740,7 +754,11 @@ function renderDetail(){
   const badge = win.samples.length
     ? `<span class="lock-badge" id="lock-d" hidden>🔒 locked</span>`
     : `<span class="alarm-only">alarms only — no cyclic data</span>`;
-  host.innerHTML = `<div class="card" id="card-d"><div class="card-h">${title}${badge}</div>`
+  const sepNote = (win.samples.length && DATA.sampleMin > DATA.tMin
+      && win.t0 < DATA.sampleMin && DATA.sampleMin <= win.t1)
+    ? `<span class="sep-note" title="Before this instant only alarms/events were logged — no cyclic waveform">◆ cyclic data begins ${fmtTime(DATA.sampleMin)}</span>`
+    : '';
+  host.innerHTML = `<div class="card" id="card-d"><div class="card-h">${title}${badge}${sepNote}</div>`
     + `<div class="chart-row"><svg class="chart" id="chart-d"></svg>`
     + `<div class="readout" id="readout-d"></div></div>`
     + `<div class="ledger" id="ledger-d"></div>`
@@ -763,7 +781,15 @@ function buildChart(win){
   const mTop = TOP + idxTop;                    // markers/crosshair start below the index axis
   const H = TOP + idxTop + laneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + XAXIS_H;
   svg.setAttribute('viewBox', `0 0 ${VB_W} ${H}`);
-  const plotL = ML, plotR = VB_W - MR;
+  // If cyclic recording began after the alarm/event log started, and that
+  // boundary falls inside this window, reserve a small strip on the left (its
+  // own linear time axis) for the pre-cyclic history, and shift the main plot
+  // right to make room — otherwise that whole stretch collapses onto index 0.
+  const hasBefore = useIdx && DATA.sampleMin > DATA.tMin && win.t0 < DATA.sampleMin && DATA.sampleMin <= win.t1;
+  const plotL0 = ML;                                          // true left margin (labels live here)
+  const beforeR = hasBefore ? plotL0 + BEFORE_W : plotL0;     // right edge of the before-strip
+  const plotL = hasBefore ? beforeR + BEFORE_GAP : plotL0;    // main plot start, shifted when hasBefore
+  const plotR = VB_W - MR;
   const dur = Math.max(1, win.t1-win.t0);
   const ST = win.samples.map(s=>s[0]);          // sample times (sorted), index-aligned
   // index axis: sample k sits at even spacing; a time maps to a fractional index
@@ -780,6 +806,21 @@ function buildChart(win){
     const k0=Math.floor(kf), k1=Math.min(N-1,k0+1); return ST[k0]+(ST[k1]-ST[k0])*(kf-k0); }
   // time→pixel: index-mapped when there's cyclic data, else plain time-linear
   const xOf = useIdx ? (t => xOfIdx(idxOfTime(t))) : (t => plotL + (t-win.t0)/dur*(plotR-plotL));
+  // the before-strip has its own tiny linear axis: win.t0..sampleMin -> plotL0..beforeR
+  function beforeXOf(t){ const span=Math.max(1, DATA.sampleMin-win.t0);
+    return plotL0 + Math.max(0,Math.min(1,(t-win.t0)/span))*(beforeR-plotL0); }
+  function beforeTimeAtX(px){ const span=Math.max(1, DATA.sampleMin-win.t0);
+    return win.t0 + Math.max(0,Math.min(1,(px-plotL0)/(beforeR-plotL0)))*span; }
+  // pixel position for ANY time in the window, routing pre-cyclic times through
+  // the before-strip's own axis instead of letting them collapse to plotL.
+  const xOfAny = hasBefore ? (t => t < DATA.sampleMin ? beforeXOf(t) : xOf(t)) : xOf;
+  // an interval [t0,t1] may itself straddle the before/after boundary — split it
+  // into up to two pixel segments so it renders correctly in both strips.
+  function barSegments(t0, t1){
+    if(!hasBefore || t0 >= DATA.sampleMin) return [[xOf(Math.max(t0,win.t0)), xOf(Math.min(t1,win.t1))]];
+    if(t1 <= DATA.sampleMin) return [[beforeXOf(Math.max(t0,win.t0)), beforeXOf(Math.min(t1,DATA.sampleMin))]];
+    return [[beforeXOf(Math.max(t0,win.t0)), beforeR], [plotL, xOf(Math.min(t1,win.t1))]];
+  }
   const ranges = VARS.map(v=>{ const c=COL[v]; let mn=Infinity, mx=-Infinity;
     for(const s of win.samples){ const y=s[c]; if(y==null) continue; if(y<mn)mn=y; if(y>mx)mx=y; }
     if(mn===Infinity){ mn=0; mx=1; } if(mn===mx){ mn-=1; mx+=1; }
@@ -790,18 +831,31 @@ function buildChart(win){
   const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PH[k]; };
   const panelsBottom = panelTop(nV-1) + PH[nV-1];
   let parts = [];
+  // the before-strip itself: a shaded, clickable/hoverable mini-timeline for the
+  // pre-cyclic alarm/event history, drawn first so markers layer on top of it.
+  if(hasBefore){
+    const bTitle = `Alarm/event history before cyclic recording began `
+      + `(${fmtDateTime(win.t0)} – ${fmtDateTime(DATA.sampleMin)}) — hover to browse`;
+    parts.push(`<rect x="${plotL0}" y="${mTop}" width="${beforeR-plotL0}" height="${panelsBottom-mTop}" `
+      + `fill="#fff6e5" stroke="#e8c07a" stroke-dasharray="3 2"><title>${esc(bTitle)}</title></rect>`);
+    parts.push(`<text x="${(plotL0+beforeR)/2}" y="${panelsBottom+14}" text-anchor="middle" font-size="8" `
+      + `font-style="italic" fill="#a05a00">history</text>`);
+  }
   if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = TOP + idxTop + r*LANE_ROW + LANE_ROW/2;
     const col = DATA.alarmColors[typ] || '#888';
-    parts.push(`<text x="${plotL-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(typ)}</text>`);
-    // one bar per active interval (Activated→Deactivated) of this alarm type
+    parts.push(`<text x="${plotL0-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(typ)}</text>`);
+    // one bar per active interval (Activated→Deactivated) of this alarm type —
+    // split across the before/after strips when an interval spans the boundary
     for(const ev of win.alarms){ if(ev[2]!==typ) continue;
-      const bx0=Math.max(plotL,xOf(ev[0])), bx1=Math.min(plotR,xOf(ev[1]));
-      parts.push(`<rect x="${bx0.toFixed(1)}" y="${y-3}" width="${Math.max(2,bx1-bx0).toFixed(1)}" height="6" fill="${col}" fill-opacity="0.8"><title>${esc(typ)} · ${fmtTime(ev[0])}–${fmtTime(ev[1])} (${fmtDur(ev[1]-ev[0])})</title></rect>`); } }); }
+      for(const [bx0,bx1] of barSegments(ev[0], ev[1])){
+        const x0=Math.max(plotL0,bx0), x1=Math.min(plotR,bx1);
+        parts.push(`<rect x="${x0.toFixed(1)}" y="${y-3}" width="${Math.max(2,x1-x0).toFixed(1)}" height="6" fill="${col}" fill-opacity="0.8"><title>${esc(typ)} · ${fmtTime(ev[0])}–${fmtTime(ev[1])} (${fmtDur(ev[1]-ev[0])})</title></rect>`);
+      } } }); }
   VARS.forEach((v,k)=>{ const c=COL[v], top=panelTop(k), [mn,mx]=ranges[k];
     parts.push(`<rect x="${plotL}" y="${top}" width="${plotR-plotL}" height="${PH[k]}" fill="${FOCUS===v?'#f7fbff':'none'}" stroke="${FOCUS===v?'#bcdcf5':'#e3e8ee'}"/>`);
     gridVals(mn, mx, PH[k]).forEach(val=>{ const y=yOf(k,val);
       parts.push(`<line x1="${plotL}" y1="${y}" x2="${plotR}" y2="${y}" stroke="#eef2f6"/>`);
-      parts.push(`<text x="${plotL-5}" y="${y+3}" text-anchor="end" font-size="8" fill="#5b6b7b">${val.toFixed(PH[k]>=150?1:0)}</text>`); });
+      parts.push(`<text x="${plotL0-5}" y="${y+3}" text-anchor="end" font-size="8" fill="#5b6b7b">${val.toFixed(PH[k]>=150?1:0)}</text>`); });
     parts.push(`<text x="${plotL+4}" y="${top+11}" font-size="10" font-weight="bold" fill="#1d2733">${v} (${UNITS[v]||''})</text>`);
     // double-click target: focuses this panel (and shrinks the others)
     parts.push(`<rect class="panel-hit" data-v="${esc(v)}" x="${plotL}" y="${top}" width="${plotR-plotL}"`
@@ -821,8 +875,8 @@ function buildChart(win){
     // and that sample's wall-clock time (bottom) — so a big time jump between two
     // adjacent ticks visibly reveals a cyclic gap.
     const topY = TOP + idxTop;
-    parts.push(`<text x="${plotL-6}" y="${topY-4}" text-anchor="end" font-size="8" fill="#0a6ebd" font-weight="bold">#index</text>`);
-    parts.push(`<text x="${plotL-6}" y="${panelsBottom+14}" text-anchor="end" font-size="8" fill="#5b6b7b" font-weight="bold">time</text>`);
+    parts.push(`<text x="${plotL0-6}" y="${topY-4}" text-anchor="end" font-size="8" fill="#0a6ebd" font-weight="bold">#index</text>`);
+    parts.push(`<text x="${plotL0-6}" y="${panelsBottom+14}" text-anchor="end" font-size="8" fill="#5b6b7b" font-weight="bold">time</text>`);
     for(let i=0;i<=nTicks;i++){ const k=Math.round((N-1)*i/nTicks); const x=xOfIdx(k);
       // top index axis
       parts.push(`<line x1="${x}" y1="${topY-3}" x2="${x}" y2="${topY}" stroke="#0a6ebd"/>`);
@@ -839,18 +893,33 @@ function buildChart(win){
       parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
       parts.push(`<text x="${x}" y="${panelsBottom+15}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTime(t)}</text>`); }
   }
-  for(const b of win.bursts){ const x=xOf(b[0]);
+  // If cyclic recording began after the alarm/event log started, and that
+  // boundary falls inside this window, mark it with a separator — everything
+  // left of it is alarm/event history (now the shaded before-strip). It lands
+  // exactly at the shifted plotL, clear of the before-strip and its own axis.
+  if(hasBefore){
+    const sx = plotL, sepTitle = `Cyclic data begins ${fmtTime(DATA.sampleMin)} — no waveform before this line`;
+    parts.push(`<line x1="${sx}" y1="${mTop}" x2="${sx}" y2="${panelsBottom}" stroke="${SEP_COLOR}" stroke-width="3"><title>${sepTitle}</title></line>`);
+    parts.push(`<circle cx="${sx}" cy="${mTop}" r="4" fill="${SEP_COLOR}"><title>${sepTitle}</title></circle>`);
+    parts.push(`<circle cx="${sx}" cy="${panelsBottom}" r="4" fill="${SEP_COLOR}"><title>${sepTitle}</title></circle>`);
+  }
+  for(const b of win.bursts){ const x=xOfAny(b[0]);
     parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 3"/>`);
     parts.push(`<text x="${x}" y="${mTop-1}" text-anchor="middle" font-size="8" font-weight="bold" fill="#c0392b">${fmtHM(b[0])}</text>`);
     parts.push(`<rect class="burst-hit" x="${x-5}" y="${mTop}" width="10" height="${panelsBottom-mTop}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTime(b[0])} — click to see in chat</title></rect>`); }
-  // mode changes: purple dashed line at each change; label only where there's room
-  let lastMX=-1e9;
-  for(const m of win.modes){ const x=xOf(m[0]);
+  // mode changes: purple dashed line at each change, with a label. Every mode
+  // gets a label — when two would collide (within 46px) they alternate onto a
+  // second row instead of being skipped, so a mode right after a crowded one
+  // (e.g. Standby) is never left unlabeled/invisible.
+  let lastMX=-1e9, modeRow=0;
+  for(const m of win.modes){ const x=xOfAny(m[0]);
     parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${esc(m[1])} at ${fmtTime(m[0])}</title></line>`);
-    if(x-lastMX>46){ parts.push(`<text x="${x+2}" y="${panelsBottom-2}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${esc(m[1])}</text>`); lastMX=x; } }
+    modeRow = (x-lastMX>46) ? 0 : 1-modeRow;
+    parts.push(`<text x="${x+2}" y="${panelsBottom-2-modeRow*10}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${esc(m[1])}</text>`);
+    lastMX=x; }
   // settings/data-change events: teal ticks along the top, plus a tick below the
   // time/date axis that lines up with the titles listed below the chart
-  for(const e of win.events){ const x=xOf(e[0]);
+  for(const e of win.events){ const x=xOfAny(e[0]);
     parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${mTop+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`);
     parts.push(`<line x1="${x}" y1="${panelsBottom+30}" x2="${x}" y2="${panelsBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`); }
   parts.push(`<line id="ev-pick-d" x1="0" x2="0" y1="${mTop}" y2="${panelsBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
@@ -867,12 +936,21 @@ function buildChart(win){
   rows += `<tr><td class="k">Mode</td><td class="v" id="ro-d-mode">—</td></tr>`;
   rows += `<tr><td class="k">Alarms</td><td class="v al" id="ro-d-al">—</td></tr>`;
   rows += `<tr><td class="k">Events</td><td class="v al" id="ro-d-ev">—</td></tr>`;
+  if(DATA.limitVars && DATA.limitVars.length){
+    rows += `<tr><td class="k" colspan="2" style="padding-top:6px;border-top:1px solid #dbe3ec">`
+      + `<b>Alarm limits</b></td></tr>`;
+    DATA.limitVars.forEach((v,i)=>{ rows += `<tr><td class="k">${esc(v)}</td>`
+      + `<td class="v" id="ro-d-lim${i}">—</td></tr>`; });
+  }
   rows += `</table><div class="hint" id="hint-d">hover to read · click to lock · double-click a graph to focus</div>`;
   ro.innerHTML = rows;
   CTRL.win=win; CTRL.svg=svg; CTRL.xOf=xOf; CTRL.yOf=yOf; CTRL.H=H;
   CTRL.xOfIdx=xOfIdx; CTRL.timeAtX=timeAtX;   // index→px and px→time (index-aware)
   CTRL.bands=VARS.map((v,k)=>[panelTop(k), panelTop(k)+PH[k], v]);
   CTRL.alarmT=win.alarms.map(a=>a[0]);   // alarm times, for magnetic cursor snap
+  // before-strip: lets the pre-cyclic alarm history be hovered/browsed too
+  CTRL.hasBefore=hasBefore; CTRL.beforeXOf=beforeXOf; CTRL.beforeTimeAtX=beforeTimeAtX;
+  CTRL.xOfAny=xOfAny; CTRL.plotL=plotL;
   svg.addEventListener('mousemove', e=>{ if(CTRL.locked) return; updateAt(xToTime(e)); });
   svg.addEventListener('mouseleave', ()=>{ if(!CTRL.locked) hideCursor(); });
   svg.addEventListener('click', e=>{
@@ -930,11 +1008,22 @@ function buildLedger(win){
   host.innerHTML = h;
 }
 function pickEvent(el){
+  const wasSel = el.classList.contains('sel');
   document.querySelectorAll('#ledger-d .chip.sel').forEach(c=>c.classList.remove('sel'));
+  if(wasSel){    // clicking an already-selected chip deselects it: unlock, hide its marker
+    const pk=document.getElementById('ev-pick-d'); if(pk) pk.setAttribute('visibility','hidden');
+    CTRL.locked=false;
+    const lb=document.getElementById('lock-d'); if(lb) lb.hidden=true;
+    const hint=document.getElementById('hint-d');
+    if(hint) hint.textContent='hover to read · click to lock · double-click a graph to focus';
+    hideCursor();
+    return;
+  }
   el.classList.add('sel');
   const t=+el.dataset.t;
   const pk=document.getElementById('ev-pick-d');
-  if(pk && CTRL.xOf){ const x=CTRL.xOf(t);
+  const xOfPick = CTRL.xOfAny || CTRL.xOf;
+  if(pk && xOfPick){ const x=xOfPick(t);
     pk.setAttribute('x1',x); pk.setAttribute('x2',x); pk.setAttribute('visibility','visible'); }
   lockAt(t, true);
 }
@@ -1100,6 +1189,9 @@ function buildStats(win){
 }
 function xToTime(e){ const r=CTRL.svg.getBoundingClientRect();
   const vbX=(e.clientX-r.left)/r.width*VB_W;
+  // left of the main plot: either the before-strip's own mini-timeline, or (in
+  // the gap between it and the main plot) clamp onto its right edge.
+  if(CTRL.hasBefore && vbX < CTRL.plotL) return CTRL.beforeTimeAtX(vbX);
   return CTRL.timeAtX ? CTRL.timeAtX(vbX)
     : CTRL.win.t0 + Math.max(0,Math.min(1,(vbX-ML)/((VB_W-MR)-ML)))*(CTRL.win.t1-CTRL.win.t0); }
 // nearest index in a plain sorted ms array
@@ -1108,17 +1200,22 @@ function nearestMs(arr, t){ let lo=0, hi=arr.length-1; if(hi<0) return -1;
   if(lo>0 && (t-arr[lo-1])<(arr[lo]-t)) return lo-1; return lo; }
 function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
   const hasSamples = win.samples && win.samples.length;
+  // hovering the before-strip: no cyclic data lives under the cursor there even
+  // though the window overall has samples, so browse alarm/event/mode history
+  // the same way a fully alarm-only window does (see the else branch below).
+  const inBefore = CTRL.hasBefore && t < DATA.sampleMin;
   let anchor, lo, hi;
-  if(hasSamples){
+  if(hasSamples && !inBefore){
     // magnetic alarm snap: if the cursor is within ALARM_SNAP_PX of an alarm,
     // anchor to that alarm so alarms stay reachable even amid dense samples.
     // *exact* (from the time-search / arrow keys) disables the magnet.
     // pixel-based magnet: snap onto an alarm when it's within ALARM_SNAP_PX of the
-    // cursor. Distance is measured in pixels (via xOf) because the index axis is
-    // non-linear in time, so a fixed time tolerance would misbehave near gaps.
+    // cursor. Distance is measured in pixels (via xOfAny, so the before-strip's
+    // own axis is respected) because the index axis is non-linear in time, so a
+    // fixed time tolerance would misbehave near gaps.
     const at=CTRL.alarmT; let snap=false, ai=-1;
     if(!exact && at && at.length){ ai=nearestMs(at,t);
-      if(Math.abs(CTRL.xOf(at[ai])-CTRL.xOf(t))<=ALARM_SNAP_PX){ anchor=at[ai]; snap=true; } }
+      if(Math.abs(CTRL.xOfAny(at[ai])-CTRL.xOfAny(t))<=ALARM_SNAP_PX){ anchor=at[ai]; snap=true; } }
     const si=nearest(win.samples, snap?anchor:t); if(si<0) return;
     const s=win.samples[si]; if(!snap) anchor=s[0];
     const sx=CTRL.xOfIdx ? CTRL.xOfIdx(si) : CTRL.xOf(s[0]);
@@ -1142,10 +1239,15 @@ function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
       hi = si<win.samples.length-1 ? (s[0]+win.samples[si+1][0])/2 : Infinity;
     }
   } else {
-    // no cyclic data behind the cursor — snap to the nearest ALARM (then event /
-    // mode / burst) so alarms recorded with no cyclic log can still be read
-    const src = win.alarms.length ? win.alarms : win.events.length ? win.events
-              : win.modes.length ? win.modes : win.bursts;
+    // no cyclic data behind the cursor — either a genuinely alarm-only window,
+    // or the pre-cyclic before-strip of a mixed one — snap to the nearest ALARM
+    // (then event / mode / burst) so that history can still be browsed. While
+    // in the before-strip, stick to pre-cyclic entries so the cursor doesn't
+    // jump out into the main plot.
+    const cap = a => !inBefore || a[0] < DATA.sampleMin;
+    const src = win.alarms.filter(cap).length ? win.alarms.filter(cap)
+              : win.events.filter(cap).length ? win.events.filter(cap)
+              : win.modes.filter(cap).length ? win.modes.filter(cap) : win.bursts.filter(cap);
     if(!src || !src.length) return;
     const times = src.map(a=>a[0]);
     const ai=nearestMs(times, t); anchor=times[ai];
@@ -1155,7 +1257,7 @@ function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
     lo = ai>0 ? (times[ai-1]+anchor)/2 : -Infinity;
     hi = ai<times.length-1 ? (anchor+times[ai+1])/2 : Infinity;
   }
-  const x=CTRL.xOf(anchor);
+  const x = (CTRL.hasBefore && anchor < DATA.sampleMin) ? CTRL.beforeXOf(anchor) : CTRL.xOf(anchor);
   const cx=document.getElementById('cx-d'); cx.setAttribute('x1',x); cx.setAttribute('x2',x); cx.setAttribute('visibility','visible');
   document.getElementById('ro-d-t').textContent = fmtTime(anchor);
   CTRL.cursorT = anchor;   // remembered so ← / → arrows can step from here
@@ -1169,7 +1271,10 @@ function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
   const evc=document.getElementById('ro-d-ev');
   if(evc){ const list=[]; for(const e of win.events){ if(e[0]>lo && e[0]<=hi) list.push(e[1]); }
     evc.innerHTML = list.length
-      ? list.map(x=>`<span style="color:${EVENT_COLOR}">${esc(x)}</span>`).join('<br>') : '—'; } }
+      ? list.map(x=>`<span style="color:${EVENT_COLOR}">${esc(x)}</span>`).join('<br>') : '—'; }
+  if(DATA.limitVars && DATA.limitVars.length){ const L=limitsAt(anchor);
+    DATA.limitVars.forEach((v,i)=>{ const cell=document.getElementById('ro-d-lim'+i);
+      if(cell) cell.textContent = fmtLimit(L && L[v]); }); } }
 function hideCursor(){ const cx=document.getElementById('cx-d'); if(cx) cx.setAttribute('visibility','hidden');
   VARS.forEach((v,k)=>{ const hg=document.getElementById('hg-d-'+k), dot=document.getElementById('dot-d-'+k);
     if(hg) hg.setAttribute('visibility','hidden'); if(dot) dot.setAttribute('visibility','hidden'); });
@@ -1177,7 +1282,9 @@ function hideCursor(){ const cx=document.getElementById('cx-d'); if(cx) cx.setAt
   const t=document.getElementById('ro-d-t'); if(t) t.textContent='—';
   const alc=document.getElementById('ro-d-al'); if(alc) alc.textContent='—';
   const mc=document.getElementById('ro-d-mode'); if(mc) mc.textContent='—';
-  const evc=document.getElementById('ro-d-ev'); if(evc) evc.textContent='—'; }
+  const evc=document.getElementById('ro-d-ev'); if(evc) evc.textContent='—';
+  if(DATA.limitVars) DATA.limitVars.forEach((v,i)=>{ const cell=document.getElementById('ro-d-lim'+i);
+    if(cell) cell.textContent='—'; }); }
 function lockAt(ts, noScroll, exact){ if(!CTRL.win) return; CTRL.locked=true;
   const lb=document.getElementById('lock-d'); if(lb) lb.hidden=false;
   const hint=document.getElementById('hint-d'); if(hint) hint.textContent='locked · click to unlock';

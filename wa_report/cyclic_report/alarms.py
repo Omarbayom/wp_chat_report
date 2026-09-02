@@ -11,12 +11,15 @@ force day-first.
 
 from __future__ import annotations
 
-from typing import List
+import re
+from typing import Dict, List, Tuple
 
 import pandas as pd
 
 from .config import ALARM_COLORS
 from .csv_io import parse_datetimes, read_ventilator_csv
+
+_LIMIT_SUFFIX = re.compile(r"\s+(Min|Max)$")
 
 
 def load_alarms(source) -> pd.DataFrame:
@@ -147,6 +150,63 @@ def load_log_events(source) -> pd.DataFrame:
     )
 
 
+def load_alarm_limits(source) -> List[Tuple["pd.Timestamp", Dict[str, list]]]:
+    """Alarm-limit snapshots from the Log CSV's ``"<Var> Min"``/``"<Var> Max"``
+    columns (e.g. ``"PIP Max"``, ``"PEEP Min"``, ``"PEEP Max"``, ``"RR Min"``,
+    ``"RR Max"``, ``"MVe Min"``, ``"MVe Max"``, ``"ApneaTime Max"`` — whichever
+    the export carries; detected by column name, not hard-coded, so a different
+    export's limit columns still work).
+
+    Only the device's own **"Alarm Limits Change"** rows are used. Every Log row
+    echoes *some* copy of these columns, but it is not a meaningful time series —
+    two rows logged the same second for different alarm types (e.g. a battery
+    alarm vs. a power alarm) can carry two different limit sets even though
+    nothing was actually reconfigured. "Alarm Limits Change" is the row the
+    device itself writes when a limit is genuinely (re)set, so only those are
+    collapsed to one entry per **change** (like ``load_modes``):
+    ``[(datetime, {var: [min_or_None, max_or_None], ...}), …]``. Empty when the
+    Log CSV has none of these columns or no such rows.
+    """
+    if source is None:
+        return []
+    df = read_ventilator_csv(source, "Alarm")
+    limit_cols = [c for c in df.columns if _LIMIT_SUFFIX.search(str(c))]
+    if "Date" not in df.columns or "Alarm" not in df.columns or not limit_cols:
+        return []
+    by_var: Dict[str, Dict[str, str]] = {}
+    for c in limit_cols:
+        m = _LIMIT_SUFFIX.search(c)
+        base, kind = c[:m.start()].strip(), m.group(1).lower()
+        by_var.setdefault(base, {})[kind] = c
+
+    mask = df["Alarm"].astype(str).str.strip().str.lower() == "alarm limits change"
+    df = df[mask]
+    if df.empty:
+        return []
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df = df.dropna(subset=["DateTime"]).sort_values("DateTime", kind="stable")
+    if df.empty:
+        return []
+    for c in limit_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    out: List[Tuple["pd.Timestamp", Dict[str, list]]] = []
+    prev = None
+    for _, row in df.iterrows():
+        snap: Dict[str, list] = {}
+        for base, kinds in by_var.items():
+            mn = row[kinds["min"]] if "min" in kinds else None
+            mx = row[kinds["max"]] if "max" in kinds else None
+            mn = None if mn is None or pd.isna(mn) else float(mn)
+            mx = None if mx is None or pd.isna(mx) else float(mx)
+            if mn is not None or mx is not None:
+                snap[base] = [mn, mx]
+        if snap and snap != prev:
+            out.append((row["DateTime"].to_pydatetime(), snap))
+            prev = snap
+    return out
+
+
 def load_patient_add_events(source) -> List["pd.Timestamp"]:
     """Times of the device's **"Add New Patient"** log rows — each marks a patient
     handover, so they split a reused device's log into per-patient segments.
@@ -163,12 +223,3 @@ def load_patient_add_events(source) -> List["pd.Timestamp"]:
     df = df.dropna(subset=["DateTime"])
     mask = df["Alarm"].astype(str).str.strip().str.lower() == "add new patient"
     return sorted(df.loc[mask, "DateTime"].tolist())
-
-
-def alarm_types_in(df: pd.DataFrame, start, end) -> List[str]:
-    """Alarm types occurring in [start, end), ordered by ALARM_COLORS."""
-    if df is None or df.empty:
-        return []
-    win = df[(df["DateTime"] >= start) & (df["DateTime"] < end)]
-    present = set(win["Alarm"].astype(str).str.strip().str.lower())
-    return [a for a in ALARM_COLORS if str(a).lower() in present]
