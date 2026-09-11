@@ -26,13 +26,13 @@ from .data_loader import load_cyclic
 from .patient import (build_patient_html, build_patients_html,
                       load_patient_info, patient_title, with_fallback_id)
 from .roster import assemble_roster, build_roster
-from .render_pages import build_charts_html, build_linked_pages
+from .render_pages import build_charts_html, build_device_report_html, build_linked_pages
 
 __all__ = [
     "VARIABLE_UNITS", "DEFAULT_VARIABLES", "ALARM_COLORS",
     "BulkEvent", "detect_bulk_events",
     "load_cyclic", "load_alarms", "load_alarm_intervals",
-    "build_charts_html", "build_linked_pages",
+    "build_charts_html", "build_device_report_html", "build_linked_pages",
     "load_patient_info", "patient_title", "build_patient_html", "with_fallback_id",
     "build_patients_html", "build_roster", "assemble_roster",
 ]

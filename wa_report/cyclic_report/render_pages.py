@@ -1,27 +1,37 @@
-"""Two linked, interactive pages (instead of one merged file).
+"""Two linked, interactive files (the device pages are ONE self-contained file).
 
-  * ``charts.html`` — the interactive cyclic charts. The **whole** cyclic log is
-    always shown (independent of the chat): a compressed *stock-style* overview
-    of the entire range sits on top, with a **draggable / resizable window**
-    (brush) you drag to pick any span. Below it a detail chart draws only that
-    span — hover for a value table + time crosshair, click to lock. A **date/time
-    search** (with seconds) sets and reflects the window exactly, and a **variable
-    picker** lets you choose one or many signals (VTi/VTe/PIP/PEEP/RR/FIO2…) on
-    the Y axis live. Alarms recorded with no cyclic data are still shown and can
-    be stepped through (◀ / ▶). Photo-burst markers (only where cyclic data
-    exists) open the chat page at the matching image.
+  * ``charts.html`` — ``build_device_report_html`` folds the Windowed / Stock /
+    Patients views into one file with an in-page tab bar (instead of 3 separate
+    files cross-linking by filename), so there's nothing to break if someone
+    opens it straight out of a ZIP without extracting first. The **Stock**
+    tab (default) shows the whole cyclic log: a compressed *stock-style*
+    overview with a **draggable / resizable window** (brush) you drag to pick
+    any span, and a detail chart below it for that span — hover for a value
+    table + time crosshair, click to lock. A **date/time search** (with
+    seconds) sets and reflects the window exactly, and a **variable picker**
+    lets you choose one or many signals (VTi/VTe/PIP/PEEP/RR/FIO2…) on the Y
+    axis live. Alarms recorded with no cyclic data are still shown and can be
+    stepped through (◀ / ▶). Photo-burst markers (only where cyclic data
+    exists) open the chat page at the matching image. The **Windowed** tab is
+    one graph per fixed clock window; **Patients** lists each patient segment
+    on a reused device.
   * ``report.html`` — the existing interactive chat report (search/filter/
-    lightbox), with a 📈 button on each image that opens the charts page at that
-    moment (and centres the window there).
+    lightbox), with a 📈 button on each image that opens ``charts.html`` at
+    that moment (and centres the window there). Only produced when a
+    WhatsApp export was uploaded.
 
-The two open each other in **named browser tabs** (``wa_report`` / ``wa_charts``),
-so they stay side by side and connected. Save both files in the *same folder*.
-``build_linked_pages`` returns a dict of the three pages.
+The two open each other in a **named browser tab** (``wa_charts`` / ``wa_report``),
+so they stay side by side and connected — cross-tab navigation *within*
+charts.html (nav buttons, a patient card's "Open charts for this patient")
+happens in-page via ``switchTab()``, never a real navigation. Save both files
+in the *same folder*. ``build_linked_pages`` returns a dict of the (up to) two
+files.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -118,35 +128,283 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
     return doc
 
 
+# ============================ single-file merge ============================
+# The Windowed / Stock (Charts) / Patients pages used to be 3 separate files
+# cross-linking by filename in named browser tabs. That breaks the moment
+# someone opens one page straight out of a ZIP's file-explorer preview
+# without extracting first (the OS then pulls out only that one file into an
+# isolated temp folder, and every link to the other pages 404s) — a real,
+# recurring support problem. build_device_report_html folds all three into
+# ONE self-contained file with an in-page tab switcher instead, so there's
+# nothing left to break. The chat (report.html) stays a separate file — its
+# content (a WhatsApp transcript) is fundamentally different, isn't always
+# generated, and is already self-contained/base64-embedded on its own.
+_ID_ATTR_RE = re.compile(r'id="([^"]+)"')
+_GET_BY_ID_RE = re.compile(r"""getElementById\((['"])([^'"]+)\1\)""")
+_STYLE_RE = re.compile(r"<style>(.*?)</style>", re.S)
+_BODY_RE = re.compile(r"<body>(.*?)</body>", re.S)
+_DATA_SCRIPT_RE = re.compile(r'<script id="data" type="application/json">(.*?)</script>', re.S)
+_ANY_SCRIPT_RE = re.compile(r"<script(?:\s[^>]*)?>(.*?)</script>", re.S)
+_ANY_SCRIPT_STRIP_RE = re.compile(r"<script(?:\s[^>]*)?>.*?</script>", re.S)
+_ON_ATTR_RE = re.compile(r"""(on\w+=)(['"])(.*?)\2""", re.S)
+_FUNC_DECL_RE = re.compile(r"^function (\w+)\(", re.M)
+
+
+def _export_inline_handlers(body: str, script: str, ns_var: str):
+    """Inline ``on*="…"`` HTML attribute handlers always run in the **global**
+    scope (per the HTML spec), so they can't see functions declared inside
+    this page's own IIFE (the IIFE is what avoids top-level identifier
+    collisions between the merged pages — see ``_page_fragment``). Some of
+    those handlers live in the static body (e.g. the varbar's checkboxes);
+    most are built by the script itself at runtime (e.g. ``chipHTML``'s
+    ``onclick="pickEvent(this)"`` — a plain JS string until the browser
+    inserts it via ``innerHTML``), so both *body* and *script* need the same
+    rewrite.
+
+    Exports every top-level ``function NAME(...)`` declared in *script* onto
+    ``window.NS_VAR``, and rewrites bare calls to any of them inside on*="…"
+    attribute text (in both *body* and *script*) to go through that
+    namespace instead (``foo(...)`` -> ``NS_VAR.foo(...)``), wherever that
+    text occurs — whether it's already real HTML or still JS source that
+    will become HTML at runtime.
+    """
+    funcs = sorted(set(_FUNC_DECL_RE.findall(script)))
+    if not funcs:
+        return body, script
+    name_re = re.compile(r"\b(" + "|".join(re.escape(f) for f in funcs) + r")(\s*\()")
+    def _rewrite(m):
+        head, quote, value = m.group(1), m.group(2), m.group(3)
+        value = name_re.sub(lambda mm: f"{ns_var}.{mm.group(1)}{mm.group(2)}", value)
+        return f"{head}{quote}{value}{quote}"
+    body2 = _ON_ATTR_RE.sub(_rewrite, body)
+    script2 = _ON_ATTR_RE.sub(_rewrite, script) + f"\nwindow.{ns_var}={{{','.join(funcs)}}};\n"
+    return body2, script2
+
+
+def _page_fragment(doc: str, prefix: str):
+    """Split a standalone page (as ``build_charts_html`` / ``build_windows_html``
+    / ``build_patients_html`` returns) into pieces ready to embed as one tab of
+    the merged single-file report, with every element id namespaced by
+    *prefix* so the pages' (otherwise identical, e.g. ``q-start``, ``data``)
+    ids don't collide once they share one DOM.
+
+    Dynamically-built ids (template literals, string concatenation — e.g.
+    windows.html's per-window ``chart-${win.i}``) are deliberately left
+    untouched: they don't match the literal ``id="…"`` / ``getElementById(…)``
+    patterns this renames, and don't collide by construction (windows.html
+    suffixes them with the window's numeric index; charts.html's
+    single-instance equivalents are suffixed with the literal ``d``).
+
+    Returns ``(style_css, body_html, data_script_tag, script_js)``: *body_html*
+    keeps its own ``<header>`` — it's not pure decoration (it also holds real
+    controls, e.g. charts.html's "📷 Save images" button and windows.html's
+    custom-window-size input, not just nav links), so it isn't safe to strip
+    wholesale; the merged page's shared tab bar sits above it instead, and
+    each header's own nav links become in-page tab switches (see
+    ``build_device_report_html``). *data_script_tag* is the
+    ``<script id="PREFIX-data" …>`` payload island (empty string if the page
+    has none, e.g. the static Patients page); *script_js* is every other
+    ``<script>`` tag's content concatenated, namespaced, ready to wrap in an
+    IIFE.
+    """
+    style_m = _STYLE_RE.search(doc)
+    body_m = _BODY_RE.search(doc)
+    body = body_m.group(1) if body_m else doc
+    # collect BEFORE stripping anything out — but drop anything that isn't a
+    # clean literal id: the regex also picks up id="…" occurrences sitting
+    # inside JS template literals (e.g. cardHTML's id="chart-${w.i}"), which
+    # must NOT be renamed (their matching getElementById call is built by
+    # concatenation, e.g. 'chart-'+win.i, not a literal — renaming only the
+    # static half would silently break the lookup).
+    ids = {i for i in _ID_ATTR_RE.findall(body) if "${" not in i}
+
+    data_m = _DATA_SCRIPT_RE.search(body)
+    data_json = data_m.group(1) if data_m else None
+    body_no_data = (body[:data_m.start()] + body[data_m.end():]) if data_m else body
+
+    code_scripts = _ANY_SCRIPT_RE.findall(body_no_data)
+    body_no_scripts = _ANY_SCRIPT_STRIP_RE.sub("", body_no_data)
+
+    def ns(text: str) -> str:
+        text = _ID_ATTR_RE.sub(
+            lambda m: f'id="{prefix}-{m.group(1)}"' if m.group(1) in ids else m.group(0), text)
+        text = _GET_BY_ID_RE.sub(
+            lambda m: f'getElementById({m.group(1)}{prefix}-{m.group(2)}{m.group(1)})'
+                     if m.group(2) in ids else m.group(0), text)
+        return text
+
+    body_final = ns(body_no_scripts)
+    script_final = ns("\n".join(code_scripts))
+    body_final, script_final = _export_inline_handlers(body_final, script_final, f"NS_{prefix}")
+    data_tag = (f'<script id="{prefix}-data" type="application/json">{data_json}</script>'
+               if data_m else "")
+    return (style_m.group(1) if style_m else ""), body_final, data_tag, script_final
+
+
+def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
+                             device_label: str = "", alarms_source=None,
+                             chat_href: str = "", min_photos: int = 3,
+                             window_minutes: int = 10, window_hours: int = 12,
+                             windows_hours: int = 1,
+                             out_path: Optional[Path] = None) -> str:
+    """One self-contained HTML file combining the Windowed / Stock (Charts) /
+    Patients views as in-page tabs — see the module-level note above for why.
+    *chat_href*, when given, stays a **separate** linked file: its nav buttons
+    and each photo-burst's 📈 link point at this file with ``?tab=``/``?t=``/
+    ``?from&to``, which the init script below turns into the right tab +
+    moment/range on load; in-page cross-tab links (nav buttons, a patient
+    card's "Open charts for this patient") use a ``#tab-NAME[?params]``
+    fragment instead, intercepted by a delegated click handler so nothing
+    ever actually navigates away from this one file.
+    """
+    roster = build_roster(cyclic_source, alarms_source)
+    device_label = device_label or (roster[-1]["label"] if roster else "")
+    has_patients = bool(roster)
+
+    charts_doc = build_charts_html(
+        folders, cyclic_source, variables, device_label=device_label,
+        alarms_source=alarms_source, chat_href=chat_href,
+        windows_href="#tab-windows", min_photos=min_photos,
+        window_minutes=window_minutes, window_hours=window_hours,
+        patient_href="#tab-patients" if has_patients else "")
+    windows_doc = build_windows_html(
+        folders, cyclic_source, variables, device_label=device_label,
+        alarms_source=alarms_source, chat_href=chat_href,
+        stock_href="#tab-charts", min_photos=min_photos,
+        window_minutes=window_minutes, window_hours=windows_hours,
+        patient_href="#tab-patients" if has_patients else "")
+
+    c_style, c_body, c_data, c_script = _page_fragment(charts_doc, "c")
+    w_style, w_body, w_data, w_script = _page_fragment(windows_doc, "w")
+    # expose the deep-link entry points the cross-tab handler needs
+    c_script += "\nwindow.PAGES=window.PAGES||{}; window.PAGES.charts={gotoTime, applyRegion};\n"
+    w_script += "\nwindow.PAGES=window.PAGES||{}; window.PAGES.windows={lockAtTime};\n"
+
+    tab_buttons = (
+        '<button type="button" class="tab-btn active" data-tab="charts" '
+        'onclick="switchTab(\'charts\')">📈 Stock view</button>'
+        '<button type="button" class="tab-btn" data-tab="windows" '
+        'onclick="switchTab(\'windows\')">📊 Windowed view</button>'
+    )
+    tab_panels = (
+        f'<div class="tab-panel" data-tab="charts">{c_body}</div>'
+        f'<div class="tab-panel" data-tab="windows" hidden>{w_body}</div>'
+    )
+    scripts = (
+        f'{c_data}\n{w_data}\n'
+        f'<script>(function(){{\n{c_script}\n}})();</script>\n'
+        f'<script>(function(){{\n{w_script}\n}})();</script>\n'
+    )
+    p_style = ""
+    if has_patients:
+        links = {"Chat": (chat_href, "wa_report")} if chat_href else {}
+        patients_doc = build_patients_html(
+            roster, device_label=device_label, links=links, chart_href="#tab-charts")
+        p_style, p_body, _, _ = _page_fragment(patients_doc, "p")
+        tab_panels += f'<div class="tab-panel" data-tab="patients" hidden>{p_body}</div>'
+        label = "Patients" if len(roster) > 1 else "Patient"
+        tab_buttons += (f'<button type="button" class="tab-btn" data-tab="patients" '
+                        f'onclick="switchTab(\'patients\')">👤 {_esc(label)}</button>')
+
+    # each tab's own header already carries the device name + an "Open chat"
+    # link (when chat_href is set) + its nav links (now in-page tab
+    # switches) — the shared shell bar only needs the tab buttons themselves,
+    # so nothing is duplicated between the shell and whichever tab is showing.
+    doc = (_DEVICE_PAGE
+           .replace("__TITLE__", _esc(device_label) or "Cyclic report")
+           .replace("__STYLES__", c_style + "\n" + w_style + "\n" + p_style)
+           .replace("__TABBUTTONS__", tab_buttons)
+           .replace("__TABPANELS__", tab_panels)
+           .replace("__SCRIPTS__", scripts))
+    if out_path is not None:
+        Path(out_path).write_text(doc, encoding="utf-8")
+    return doc
+
+
+_DEVICE_PAGE = r"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ — Cyclic report</title>
+<style>
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI",system-ui,Arial,sans-serif; color:#1d2733;
+    background:#f4f6f9; font-size:14px; }
+  .tabbar { background:#08599c; color:#fff; padding:0 14px; display:flex; align-items:center;
+    gap:2px; flex-wrap:wrap; position:sticky; top:0; z-index:50; }
+  .tab-btn { font:inherit; font-size:13.5px; padding:13px 18px; border:0; background:none;
+    color:rgba(255,255,255,.72); cursor:pointer; border-bottom:3px solid transparent; }
+  .tab-btn:hover { color:#fff; }
+  .tab-btn.active { color:#fff; border-bottom-color:#fff; font-weight:600; background:rgba(255,255,255,.08); }
+  .tab-panel[hidden] { display:none; }
+  __STYLES__
+</style></head><body>
+<div class="tabbar">__TABBUTTONS__</div>
+__TABPANELS__
+__SCRIPTS__
+<script>
+function switchTab(name){
+  document.querySelectorAll('.tab-panel').forEach(p=>{ p.hidden = (p.dataset.tab !== name); });
+  document.querySelectorAll('.tab-btn').forEach(b=>{ b.classList.toggle('active', b.dataset.tab===name); });
+}
+// nav buttons + a patient card's "Open charts for this patient" use
+// #tab-NAME[?from=&to=|?t=] instead of a real href — switch tab in place and
+// (when given) forward the deep-link params into that tab's own API.
+document.addEventListener('click', e=>{
+  const a = e.target.closest('a[href^="#tab-"]'); if(!a) return;
+  e.preventDefault();
+  const href = a.getAttribute('href').slice(1);       // drop leading '#'
+  const qIdx = href.indexOf('?');
+  const tab = (qIdx>=0 ? href.slice(0,qIdx) : href).replace(/^tab-/, '');
+  switchTab(tab);
+  if(qIdx>=0){
+    const params = new URLSearchParams(href.slice(qIdx));
+    const t=params.get('t'), from=params.get('from'), to=params.get('to');
+    const api = window.PAGES && window.PAGES[tab];
+    if(api){
+      if(from!=null && to!=null && api.applyRegion) api.applyRegion(+from, +to);
+      else if(t!=null){
+        if(api.gotoTime) api.gotoTime(+t);
+        else if(api.lockAtTime) api.lockAtTime(+t);
+      }
+    }
+  }
+});
+// entry deep-link: ?tab= picks the tab directly; each tab's own init script
+// already reads the same ?t= / ?from&to= from this shared URL and acts on
+// it regardless of which tab that leaves visible.
+switchTab(new URLSearchParams(location.search).get('tab') || 'charts');
+</script>
+</body></html>
+"""
+
+
 def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
                        hospital: str = "", device_label: str = "",
                        alarms_source=None, min_photos: int = 3,
                        window_minutes: int = 10, window_hours: int = 12,
                        max_img_dim: int = 480, mode: str = "hourly",
                        buffer_minutes: int = 0, windows_hours: int = 1):
-    """Return a dict of **three** interactive pages that link to each other. Save
-    them side by side in one folder:
+    """Return a dict of interactive pages:
 
-      * ``report.html``  — the chat report (1-hour sections, 24-hour times).
-      * ``windows.html`` — one graph per fixed clock window (defaults to
-        *windows_hours*; the user can re-slice live to 1/2/3/6/12/24h).
-      * ``charts.html``  — the stock-style overview with a draggable window +
-        date/time search + variable picker (defaults to *window_hours* wide).
+      * ``report.html``  — the chat report (1-hour sections, 24-hour times),
+        only when a WhatsApp export was uploaded.
+      * ``charts.html``  — ONE self-contained file with the Windowed / Stock /
+        Patients views as in-page tabs (see ``build_device_report_html``).
 
-    The three cross-link in named browser tabs (``wa_report`` / ``wa_windows`` /
-    ``wa_charts``): photo-burst markers open the chat at the matching image, and
-    the chat's 📈 buttons open the stock view at that moment.
+    Links between the two use ``?tab=``/``?t=`` query params in the named
+    ``wa_charts`` tab; photo-burst markers in charts.html open the chat at the
+    matching image, and the chat's 📈 buttons open the stock tab at that moment.
 
     **The chat is optional.** If *folders* is empty/None (the user uploaded only
     the cyclic data), the chat page is skipped and the result has just
-    ``windows.html`` + ``charts.html`` — those show the cyclic log (and any
-    alarms) with no photo markers and no chat links.
+    ``charts.html`` — it shows the cyclic log (and any alarms) with no photo
+    markers and no chat links.
     """
     has_chat = bool(folders)
     chat_href = "report.html" if has_chat else ""
 
     # Per-patient roster from the cyclic CSV + log ("Add New Patient" handovers).
-    # Drives the Patients page, the banners, and a blank report title. The current
+    # Drives the Patients tab, the banners, and a blank report title. The current
     # (last) patient supplies the label; earlier patients are b1/b2/…
     roster = build_roster(cyclic_source, alarms_source)
     device_label = device_label or (roster[-1]["label"] if roster else "")
@@ -163,40 +421,22 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
         if imgs:
             cache.prewarm(imgs)
         nav_links = (
-            '<a class="nav-btn" href="windows.html" target="wa_windows">📊 Windowed view</a>'
-            '<a class="nav-btn" href="charts.html" target="wa_charts">📈 Stock view</a>'
+            '<a class="nav-btn" href="charts.html?tab=windows" target="wa_charts">📊 Windowed view</a>'
+            '<a class="nav-btn" href="charts.html?tab=charts" target="wa_charts">📈 Stock view</a>'
         )
         if roster:
             label = "Patients" if len(roster) > 1 else "Patient"
-            nav_links += f'<a class="nav-btn" href="patient.html" target="wa_patient">👤 {label}</a>'
+            nav_links += f'<a class="nav-btn" href="charts.html?tab=patients" target="wa_charts">👤 {label}</a>'
         result["report.html"] = render_html_str(
             report, cache, chart_href="charts.html", hour24=True,
             nav_links=nav_links)
 
-    patient_href = "patient.html" if roster else ""
-    result["windows.html"] = build_windows_html(
+    result["charts.html"] = build_device_report_html(
         folders, cyclic_source, variables, device_label=device_label,
         alarms_source=alarms_source, chat_href=chat_href,
-        stock_href="charts.html", min_photos=min_photos,
-        window_minutes=window_minutes, window_hours=windows_hours,
-        patient_href=patient_href,
+        min_photos=min_photos, window_minutes=window_minutes,
+        window_hours=window_hours, windows_hours=windows_hours,
     )
-    result["charts.html"] = build_charts_html(
-        folders, cyclic_source, variables, device_label=device_label,
-        alarms_source=alarms_source, chat_href=chat_href,
-        windows_href="windows.html", min_photos=min_photos,
-        window_minutes=window_minutes, window_hours=window_hours,
-        patient_href=patient_href,
-    )
-    # Dedicated, cross-linked Patients page (one card per patient on the device).
-    if roster:
-        links = {}
-        if has_chat:
-            links["Chat"] = ("report.html", "wa_report")
-        links["Windowed view"] = ("windows.html", "wa_windows")
-        links["Stock view"] = ("charts.html", "wa_charts")
-        result["patient.html"] = build_patients_html(
-            roster, device_label=device_label, links=links, chart_href="charts.html")
     return result
 
 
@@ -1257,7 +1497,8 @@ function closeDetailModal(){ const m=document.getElementById('detail-modal'); if
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDetailModal(); });
 function pickEvent(el){
   const wasSel = el.classList.contains('sel');
-  document.querySelectorAll('#ledger-d .chip.sel').forEach(c=>c.classList.remove('sel'));
+  const ldg=document.getElementById('ledger-d');
+  if(ldg) ldg.querySelectorAll('.chip.sel').forEach(c=>c.classList.remove('sel'));
   if(wasSel){    // clicking an already-selected chip deselects it: unlock, hide its marker
     const pk=document.getElementById('ev-pick-d'); if(pk) pk.setAttribute('visibility','hidden');
     CTRL.locked=false;

@@ -58,21 +58,32 @@ _README_TXT_NAME = "README - read this first.txt"
 def _linked_pages_readme(pages: dict[str, str]) -> str:
     """Plain-text instructions bundled inside the ZIP.
 
-    The pages cross-link by plain relative filename (``charts.html`` ->
-    ``windows.html`` etc.), so they only resolve when all the files are
-    sitting in the *same* real folder. The most common way that breaks: on
-    Windows/macOS you can double-click a file straight out of a ZIP's built-in
-    preview without ever extracting it — the OS then silently pulls out just
-    that ONE file into a private temp folder, so every link to the other pages
-    404s. This note exists so that failure mode doesn't look like a bug.
+    ``charts.html`` is now a single self-contained file (the Windowed / Stock
+    / Patients views are in-page tabs inside it, not separate files) — it
+    opens correctly on its own no matter how it's extracted. The only
+    cross-file link left is ``report.html`` <-> ``charts.html`` (the chat,
+    only present when a WhatsApp export was uploaded), which still only
+    resolves when both sit in the *same* real folder. The most common way
+    that breaks: on Windows/macOS you can double-click a file straight out of
+    a ZIP's built-in preview without ever extracting it — the OS then
+    silently pulls out just that ONE file into a private temp folder, so the
+    link to the other page 404s. This note exists so that failure mode
+    doesn't look like a bug.
     """
     names = ", ".join(sorted(pages))
+    if len(pages) <= 1:
+        return (
+            "HOW TO OPEN THIS REPORT\n"
+            "========================\n\n"
+            "This ZIP holds one self-contained page: " + names + ".\n"
+            "Just extract the ZIP and double-click it — no other files are needed.\n"
+        )
     return (
         "HOW TO OPEN THIS REPORT\n"
         "========================\n\n"
-        "This ZIP holds several linked web pages: " + names + ".\n"
-        "They open each other by name, so they only work when they are all\n"
-        "sitting together in one real folder on disk.\n\n"
+        "This ZIP holds two linked pages: " + names + " (the chat links to the "
+        "charts page and back). They only find each other when they're sitting\n"
+        "together in one real folder on disk.\n\n"
         "1. Right-click the downloaded ZIP file and choose \"Extract All\"\n"
         "   (Windows) or double-click it in Finder (macOS) to unpack it into\n"
         "   its own folder.\n"
@@ -81,7 +92,7 @@ def _linked_pages_readme(pages: dict[str, str]) -> str:
         "Do NOT open a page directly from inside the ZIP's own preview window\n"
         "(the one you get without extracting first) — Windows/macOS will\n"
         "quietly copy out only that single file to a temporary folder, and\n"
-        "every link to the other pages will then fail to open.\n\n"
+        "the link to the other page will then fail to open.\n\n"
         "Do this on every computer the report is shared with — extracting it\n"
         "once on your own machine does not carry over when you re-zip or\n"
         "re-send just one .html file.\n"
@@ -303,17 +314,24 @@ if submitted:
                 data=buf.getvalue(), file_name="linked_report.zip",
                 mime="application/zip",
             )
-            st.warning(
-                "⚠️ **Extract the whole ZIP into one folder before opening anything.** "
-                "The pages link to each other by filename, so they only find each "
-                "other when they sit **side by side on disk**. Right-click the "
-                "downloaded ZIP → **Extract All** (don't double-click a page straight "
-                "out of the ZIP's file-explorer preview — Windows/macOS then pulls out "
-                "only that one file into a temporary folder on its own, and every link "
-                "to the other pages breaks). Do this on every computer that opens the "
-                "report, not just this one. See the included README.txt for the same "
-                "steps."
-            )
+            if n > 1:
+                st.warning(
+                    "⚠️ **Extract the whole ZIP into one folder before opening anything.** "
+                    "The chat and charts pages link to each other by filename, so they "
+                    "only find each other when they sit **side by side on disk**. "
+                    "Right-click the downloaded ZIP → **Extract All** (don't double-click "
+                    "a page straight out of the ZIP's file-explorer preview — "
+                    "Windows/macOS then pulls out only that one file into a temporary "
+                    "folder on its own, and the link to the other page breaks). Do this "
+                    "on every computer that opens the report, not just this one. See the "
+                    "included README.txt for the same steps."
+                )
+            else:
+                st.caption(
+                    "charts.html is a single self-contained file (Windowed / Stock / "
+                    "Patients are in-page tabs inside it) — extract it and open it, "
+                    "no other files needed."
+                )
             st.caption("Preview of the stock overview (charts.html) below.")
             components.html(pages["charts.html"], height=760, scrolling=True)
 
