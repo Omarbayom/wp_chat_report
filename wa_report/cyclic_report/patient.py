@@ -173,7 +173,7 @@ def build_patient_html(patient: Pairs, device_label: str = "",
     """A dedicated, standalone **Patient** page (opens in the ``wa_patient`` tab).
 
     *links* maps a button label to an ``(href, target)`` pair for the header nav
-    (e.g. ``{"Windowed view": ("windows.html", "wa_windows")}``)."""
+    (e.g. ``{"Chat": ("report.html", "wa_report")}``)."""
     links = links or {}
     title = device_label or patient_title(patient) or "Patient"
     if patient:

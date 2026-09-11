@@ -1,8 +1,8 @@
-"""Shared data payload for the interactive chart pages (charts.html / windows.html).
+"""Shared data payload for the interactive charts page (charts.html).
 
 Loads the cyclic CSV, alarm intervals, mode changes, log events, photo bursts
 and the patient roster into one JSON-able ``payload`` (embedded client-side so
-the pages stay fully functional offline) plus a ``meta`` dict used for the
+the page stays fully functional offline) plus a ``meta`` dict used for the
 page's stat bar / notes.
 """
 

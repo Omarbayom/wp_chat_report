@@ -58,8 +58,8 @@ _README_TXT_NAME = "README - read this first.txt"
 def _linked_pages_readme(pages: dict[str, str]) -> str:
     """Plain-text instructions bundled inside the ZIP.
 
-    ``charts.html`` is now a single self-contained file (the Windowed / Stock
-    / Patients views are in-page tabs inside it, not separate files) — it
+    ``charts.html`` is now a single self-contained file (the Timeline / Patients
+    views are in-page tabs inside it, not separate files) — it
     opens correctly on its own no matter how it's extracted. The only
     cross-file link left is ``report.html`` <-> ``charts.html`` (the chat,
     only present when a WhatsApp export was uploaded), which still only
@@ -172,7 +172,7 @@ st.caption(
     "Upload any combination of a **WhatsApp export** (chat), the ventilator's "
     "**cyclic log(s)**, and the **alarm log(s)** — each box accepts several files, "
     "stitched together by time (overlapping rows are de-duplicated). You get the "
-    "interactive pages (cyclic charts, windowed view, chat, patients); when a "
+    "interactive pages (cyclic timeline charts, chat, patients); when a "
     "WhatsApp export is included, the printable **Word** report is offered too."
 )
 
@@ -267,7 +267,7 @@ if submitted:
                         hospital=hospital.strip(), device_label=label.strip(),
                         alarms_source=_csv_sources(alarm_up),
                         min_photos=int(min_photos), window_minutes=int(burst_gap),
-                        window_hours=int(window_hours), windows_hours=int(window_hours),
+                        window_hours=int(window_hours),
                         max_img_dim=int(max_dim), mode=mode,
                         buffer_minutes=int(buffer_minutes),
                     )
@@ -328,11 +328,11 @@ if submitted:
                 )
             else:
                 st.caption(
-                    "charts.html is a single self-contained file (Windowed / Stock / "
-                    "Patients are in-page tabs inside it) — extract it and open it, "
+                    "charts.html is a single self-contained file (Timeline / Patients "
+                    "are in-page tabs inside it) — extract it and open it, "
                     "no other files needed."
                 )
-            st.caption("Preview of the stock overview (charts.html) below.")
+            st.caption("Preview of the timeline overview (charts.html) below.")
             components.html(pages["charts.html"], height=760, scrolling=True)
 
         # --- Word report ---

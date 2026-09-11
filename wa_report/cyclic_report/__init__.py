@@ -9,9 +9,8 @@ renders interactive, self-contained HTML pages. Split across submodules:
     alarms          read the alarm/event Log CSV
     roster          per-patient episode segmentation
     patient         patient preamble + patient/banner HTML
-    render_combined build_payload — the shared data payload for both chart pages
-    render_pages    charts.html (stock overview) + report.html/windows.html linking
-    render_windows  windows.html (fixed-window view)
+    render_combined build_payload — the shared data payload for the charts page
+    render_pages    charts.html (timeline overview) + report.html linking
 
 The public names below are re-exported so callers can keep importing them
 straight from ``wa_report.cyclic_report``.

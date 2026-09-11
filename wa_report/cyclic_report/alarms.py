@@ -202,6 +202,17 @@ def load_log_entries(source) -> pd.DataFrame:
     row — not a hard-coded column list, so a different device/firmware's
     column set still works.
 
+    **The ``Cyc. *`` columns are blank on most rows — this is the device's
+    own behaviour, not a gap in this reader.** Checked against a real export
+    (`test/LogData 28-07-2026 114304.csv`): of 709 non-alarm rows across 48
+    distinct event types, only ``"Standby Mode Activated"`` ever carries a
+    non-blank ``Cyc. *`` snapshot (43 of its 117 occurrences do; every other
+    type — mode changes/confirmations, battery events, screen lock/unlock,
+    "View Logs", circuit checks, …  — is 0 for 0). Reasonable to read as
+    deliberate: Standby is the moment active ventilation stops, so recording
+    the last live reading right at that transition is a meaningful
+    checkpoint in a way most other logged actions aren't.
+
     Returns ``DataFrame[DateTime, Text, Kind, Settings]`` sorted by time
     (``Kind`` is ``"mode"``/``"event"``); an empty (but correctly-typed)
     frame when *source* is falsy or unreadable.

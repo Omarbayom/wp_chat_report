@@ -1,20 +1,20 @@
 """Two linked, interactive files (the device pages are ONE self-contained file).
 
-  * ``charts.html`` — ``build_device_report_html`` folds the Windowed / Stock /
-    Patients views into one file with an in-page tab bar (instead of 3 separate
+  * ``charts.html`` — ``build_device_report_html`` folds the Timeline /
+    Patients views into one file with an in-page tab bar (instead of separate
     files cross-linking by filename), so there's nothing to break if someone
-    opens it straight out of a ZIP without extracting first. The **Stock**
-    tab (default) shows the whole cyclic log: a compressed *stock-style*
-    overview with a **draggable / resizable window** (brush) you drag to pick
-    any span, and a detail chart below it for that span — hover for a value
+    opens it straight out of a ZIP without extracting first. The **Timeline**
+    tab (default, and — when there are no patients to split — the only tab)
+    shows the whole cyclic log: a full-log overview with a
+    **draggable / resizable window** (brush) you drag to pick any span, and
+    a detail chart below it for that span — hover for a value
     table + time crosshair, click to lock. A **date/time search** (with
     seconds) sets and reflects the window exactly, and a **variable picker**
     lets you choose one or many signals (VTi/VTe/PIP/PEEP/RR/FIO2…) on the Y
     axis live. Alarms recorded with no cyclic data are still shown and can be
     stepped through (◀ / ▶). Photo-burst markers (only where cyclic data
-    exists) open the chat page at the matching image. The **Windowed** tab is
-    one graph per fixed clock window; **Patients** lists each patient segment
-    on a reused device.
+    exists) open the chat page at the matching image. **Patients** lists each
+    patient segment on a reused device.
   * ``report.html`` — the existing interactive chat report (search/filter/
     lightbox), with a 📈 button on each image that opens ``charts.html`` at
     that moment (and centres the window there). Only produced when a
@@ -41,7 +41,6 @@ from ..report import build_report
 from .config import DEFAULT_VARIABLES
 from .patient import build_patients_html
 from .render_combined import _esc, _ms, build_payload
-from .render_windows import build_windows_html
 from .roster import build_roster
 
 
@@ -59,8 +58,7 @@ def _var_options(present, selected) -> str:
 
 def build_charts_html(folders, cyclic_source, variables: Sequence[str],
                       device_label: str = "", alarms_source=None,
-                      chat_href: str = "report.html",
-                      windows_href: str = "windows.html", min_photos: int = 3,
+                      chat_href: str = "report.html", min_photos: int = 3,
                       window_minutes: int = 10, window_hours: int = 12,
                       patient_href: str = "", out_path: Optional[Path] = None) -> str:
     """Interactive charts page. The whole cyclic log is embedded and shown; the
@@ -112,7 +110,6 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
            .replace("__DEVICE__", _esc(device_label) or "Cyclic charts")
            .replace("__CHATLINK__", chat_link)
            .replace("__CHATHREF__", _esc(chat_href))
-           .replace("__WINDOWSHREF__", _esc(windows_href))
            .replace("__VAROPTS__", _var_options(meta["present"], meta["default_sel"]))
            .replace("__OVVAROPTS__", ov_var_opts)
            .replace("__NSAMP__", str(meta["n_samples"]))
@@ -129,12 +126,13 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
 
 
 # ============================ single-file merge ============================
-# The Windowed / Stock (Charts) / Patients pages used to be 3 separate files
-# cross-linking by filename in named browser tabs. That breaks the moment
-# someone opens one page straight out of a ZIP's file-explorer preview
-# without extracting first (the OS then pulls out only that one file into an
-# isolated temp folder, and every link to the other pages 404s) — a real,
-# recurring support problem. build_device_report_html folds all three into
+# The Timeline (Charts) / Patients pages (originally these plus a third,
+# now-removed Windowed page — see build_device_report_html) used to be
+# separate files cross-linking by filename in named browser tabs. That breaks
+# the moment someone opens one page straight out of a ZIP's file-explorer
+# preview without extracting first (the OS then pulls out only that one file
+# into an isolated temp folder, and every link to the other pages 404s) — a
+# real, recurring support problem. build_device_report_html folds them into
 # ONE self-contained file with an in-page tab switcher instead, so there's
 # nothing left to break. The chat (report.html) stays a separate file — its
 # content (a WhatsApp transcript) is fundamentally different, isn't always
@@ -182,26 +180,24 @@ def _export_inline_handlers(body: str, script: str, ns_var: str):
 
 
 def _page_fragment(doc: str, prefix: str):
-    """Split a standalone page (as ``build_charts_html`` / ``build_windows_html``
-    / ``build_patients_html`` returns) into pieces ready to embed as one tab of
-    the merged single-file report, with every element id namespaced by
-    *prefix* so the pages' (otherwise identical, e.g. ``q-start``, ``data``)
-    ids don't collide once they share one DOM.
+    """Split a standalone page (as ``build_charts_html`` / ``build_patients_html``
+    returns) into pieces ready to embed as one tab of the merged single-file
+    report, with every element id namespaced by *prefix* so the pages'
+    (otherwise identical, e.g. ``q-start``, ``data``) ids don't collide once
+    they share one DOM.
 
     Dynamically-built ids (template literals, string concatenation — e.g.
-    windows.html's per-window ``chart-${win.i}``) are deliberately left
-    untouched: they don't match the literal ``id="…"`` / ``getElementById(…)``
-    patterns this renames, and don't collide by construction (windows.html
-    suffixes them with the window's numeric index; charts.html's
-    single-instance equivalents are suffixed with the literal ``d``).
+    charts.html's per-variable ``hg-d-${k}``/``dot-d-${k}`` cursor markers)
+    are deliberately left untouched: they don't match the literal
+    ``id="…"`` / ``getElementById(…)`` patterns this renames, and don't
+    collide by construction (each ``k`` is already a distinct variable key).
 
     Returns ``(style_css, body_html, data_script_tag, script_js)``: *body_html*
     keeps its own ``<header>`` — it's not pure decoration (it also holds real
-    controls, e.g. charts.html's "📷 Save images" button and windows.html's
-    custom-window-size input, not just nav links), so it isn't safe to strip
-    wholesale; the merged page's shared tab bar sits above it instead, and
-    each header's own nav links become in-page tab switches (see
-    ``build_device_report_html``). *data_script_tag* is the
+    controls, e.g. charts.html's "📷 Save images" button, not just nav links)
+    — so it isn't safe to strip wholesale; the merged page's shared tab bar
+    sits above it instead, and each header's own nav links become in-page tab
+    switches (see ``build_device_report_html``). *data_script_tag* is the
     ``<script id="PREFIX-data" …>`` payload island (empty string if the page
     has none, e.g. the static Patients page); *script_js* is every other
     ``<script>`` tag's content concatenated, namespaced, ready to wrap in an
@@ -212,9 +208,9 @@ def _page_fragment(doc: str, prefix: str):
     body = body_m.group(1) if body_m else doc
     # collect BEFORE stripping anything out — but drop anything that isn't a
     # clean literal id: the regex also picks up id="…" occurrences sitting
-    # inside JS template literals (e.g. cardHTML's id="chart-${w.i}"), which
+    # inside JS template literals (e.g. charts.html's id="hg-d-${k}"), which
     # must NOT be renamed (their matching getElementById call is built by
-    # concatenation, e.g. 'chart-'+win.i, not a literal — renaming only the
+    # concatenation, e.g. 'hg-d-'+k, not a literal — renaming only the
     # static half would silently break the lookup).
     ids = {i for i in _ID_ATTR_RE.findall(body) if "${" not in i}
 
@@ -245,10 +241,9 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
                              device_label: str = "", alarms_source=None,
                              chat_href: str = "", min_photos: int = 3,
                              window_minutes: int = 10, window_hours: int = 12,
-                             windows_hours: int = 1,
                              out_path: Optional[Path] = None) -> str:
-    """One self-contained HTML file combining the Windowed / Stock (Charts) /
-    Patients views as in-page tabs — see the module-level note above for why.
+    """One self-contained HTML file combining the Timeline (Charts) / Patients
+    views as in-page tabs — see the module-level note above for why.
     *chat_href*, when given, stays a **separate** linked file: its nav buttons
     and each photo-burst's 📈 link point at this file with ``?tab=``/``?t=``/
     ``?from&to``, which the init script below turns into the right tab +
@@ -256,6 +251,15 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
     card's "Open charts for this patient") use a ``#tab-NAME[?params]``
     fragment instead, intercepted by a delegated click handler so nothing
     ever actually navigates away from this one file.
+
+    (There used to be a third "Windowed" tab — one graph per fixed clock
+    window, via ``render_windows.build_windows_html`` — removed along with
+    that whole module: it duplicated the Timeline tab's job with none of its
+    interactivity, and being a second, independently-scripted tab sharing the
+    page's global ← / → keyboard shortcuts with the Timeline tab meant those
+    shortcuts silently acted on the Timeline tab's state even while looking
+    at the Windowed one, which read as "the shortcut doesn't work" whenever
+    you'd switched tabs.)
     """
     roster = build_roster(cyclic_source, alarms_source)
     device_label = device_label or (roster[-1]["label"] if roster else "")
@@ -264,36 +268,22 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
     charts_doc = build_charts_html(
         folders, cyclic_source, variables, device_label=device_label,
         alarms_source=alarms_source, chat_href=chat_href,
-        windows_href="#tab-windows", min_photos=min_photos,
+        min_photos=min_photos,
         window_minutes=window_minutes, window_hours=window_hours,
-        patient_href="#tab-patients" if has_patients else "")
-    windows_doc = build_windows_html(
-        folders, cyclic_source, variables, device_label=device_label,
-        alarms_source=alarms_source, chat_href=chat_href,
-        stock_href="#tab-charts", min_photos=min_photos,
-        window_minutes=window_minutes, window_hours=windows_hours,
         patient_href="#tab-patients" if has_patients else "")
 
     c_style, c_body, c_data, c_script = _page_fragment(charts_doc, "c")
-    w_style, w_body, w_data, w_script = _page_fragment(windows_doc, "w")
     # expose the deep-link entry points the cross-tab handler needs
     c_script += "\nwindow.PAGES=window.PAGES||{}; window.PAGES.charts={gotoTime, applyRegion};\n"
-    w_script += "\nwindow.PAGES=window.PAGES||{}; window.PAGES.windows={lockAtTime};\n"
 
     tab_buttons = (
         '<button type="button" class="tab-btn active" data-tab="charts" '
-        'onclick="switchTab(\'charts\')">📈 Stock view</button>'
-        '<button type="button" class="tab-btn" data-tab="windows" '
-        'onclick="switchTab(\'windows\')">📊 Windowed view</button>'
+        'onclick="switchTab(\'charts\')">📈 Timeline view</button>'
     )
-    tab_panels = (
-        f'<div class="tab-panel" data-tab="charts">{c_body}</div>'
-        f'<div class="tab-panel" data-tab="windows" hidden>{w_body}</div>'
-    )
+    tab_panels = f'<div class="tab-panel" data-tab="charts">{c_body}</div>'
     scripts = (
-        f'{c_data}\n{w_data}\n'
+        f'{c_data}\n'
         f'<script>(function(){{\n{c_script}\n}})();</script>\n'
-        f'<script>(function(){{\n{w_script}\n}})();</script>\n'
     )
     p_style = ""
     if has_patients:
@@ -312,7 +302,7 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
     # so nothing is duplicated between the shell and whichever tab is showing.
     doc = (_DEVICE_PAGE
            .replace("__TITLE__", _esc(device_label) or "Cyclic report")
-           .replace("__STYLES__", c_style + "\n" + w_style + "\n" + p_style)
+           .replace("__STYLES__", c_style + "\n" + p_style)
            .replace("__TABBUTTONS__", tab_buttons)
            .replace("__TABPANELS__", tab_panels)
            .replace("__SCRIPTS__", scripts))
@@ -362,10 +352,7 @@ document.addEventListener('click', e=>{
     const api = window.PAGES && window.PAGES[tab];
     if(api){
       if(from!=null && to!=null && api.applyRegion) api.applyRegion(+from, +to);
-      else if(t!=null){
-        if(api.gotoTime) api.gotoTime(+t);
-        else if(api.lockAtTime) api.lockAtTime(+t);
-      }
+      else if(t!=null && api.gotoTime) api.gotoTime(+t);
     }
   }
 });
@@ -383,17 +370,17 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
                        alarms_source=None, min_photos: int = 3,
                        window_minutes: int = 10, window_hours: int = 12,
                        max_img_dim: int = 480, mode: str = "hourly",
-                       buffer_minutes: int = 0, windows_hours: int = 1):
+                       buffer_minutes: int = 0):
     """Return a dict of interactive pages:
 
       * ``report.html``  — the chat report (1-hour sections, 24-hour times),
         only when a WhatsApp export was uploaded.
-      * ``charts.html``  — ONE self-contained file with the Windowed / Stock /
+      * ``charts.html``  — ONE self-contained file with the Timeline /
         Patients views as in-page tabs (see ``build_device_report_html``).
 
     Links between the two use ``?tab=``/``?t=`` query params in the named
     ``wa_charts`` tab; photo-burst markers in charts.html open the chat at the
-    matching image, and the chat's 📈 buttons open the stock tab at that moment.
+    matching image, and the chat's 📈 buttons open the timeline tab at that moment.
 
     **The chat is optional.** If *folders* is empty/None (the user uploaded only
     the cyclic data), the chat page is skipped and the result has just
@@ -421,8 +408,7 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
         if imgs:
             cache.prewarm(imgs)
         nav_links = (
-            '<a class="nav-btn" href="charts.html?tab=windows" target="wa_charts">📊 Windowed view</a>'
-            '<a class="nav-btn" href="charts.html?tab=charts" target="wa_charts">📈 Stock view</a>'
+            '<a class="nav-btn" href="charts.html?tab=charts" target="wa_charts">📈 Timeline view</a>'
         )
         if roster:
             label = "Patients" if len(roster) > 1 else "Patient"
@@ -435,7 +421,7 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
         folders, cyclic_source, variables, device_label=device_label,
         alarms_source=alarms_source, chat_href=chat_href,
         min_photos=min_photos, window_minutes=window_minutes,
-        window_hours=window_hours, windows_hours=windows_hours,
+        window_hours=window_hours,
     )
     return result
 
@@ -485,11 +471,15 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .viewset { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
     background:#fff; border:1px solid #e3e8ee; border-radius:10px; padding:8px 14px; margin:8px 20px 0; }
   .viewset .lbl { font-size:12px; color:#5b6b7b; font-weight:600; margin-right:2px; }
-  .viewset input, .viewset select { font:inherit; padding:5px 8px; border:1px solid #e3e8ee; border-radius:8px; }
-  .viewset input { width:170px; }
+  .viewset input[type=text], .viewset select { font:inherit; padding:5px 8px; border:1px solid #e3e8ee; border-radius:8px; }
+  .viewset input[type=text] { width:170px; }
   .viewset button { font:inherit; padding:5px 11px; border:1px solid #cfd8e3; border-radius:8px;
     background:#f7f9fc; color:#0a6ebd; cursor:pointer; }
   .viewset button:hover { background:#eaf4fc; }
+  .vs-scope, .vs-fields { display:inline-flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .vs-scope label, .vs-fields label { font-size:12px; color:#5b6b7b; display:inline-flex;
+    align-items:center; gap:3px; cursor:pointer; white-space:nowrap; }
+  .vs-fields { border-left:1px solid #e3e8ee; padding-left:10px; }
   .overview { background:#fff; border:1px solid #e3e8ee; border-radius:10px; padding:8px 12px 4px; margin:12px 20px 0; }
   .overview .ov-h { font-size:12px; color:#5b6b7b; margin:0 0 4px; }
   svg.ov { width:100%; height:auto; display:block; touch-action:none; }
@@ -516,7 +506,14 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .ledger { margin-top:8px; border-top:1px solid #eef2f6; padding-top:6px; }
   .ledger-h { font-size:11.5px; color:#5b6b7b; margin:0 0 4px; }
   .ledger-h b { color:#1d2733; }
-  .ledger .chips { display:flex; flex-wrap:wrap; gap:5px; max-height:150px; overflow:auto;
+  /* each of Alarms / Events / Mode changes is its own collapsible section,
+     open by default, showing every chip in the group */
+  .ledger-sec { margin-top:7px; }
+  .ledger-sec:first-of-type { margin-top:0; }
+  summary.ledger-h { cursor:pointer; margin:0; list-style:revert; }
+  summary.ledger-h::marker { font-size:10px; color:#5b6b7b; }
+  .ledger-sec .chips { margin-top:4px; }
+  .ledger .chips { display:flex; flex-wrap:wrap; gap:5px;
     user-select:text; -webkit-user-select:text; }
   .chip { font-size:11.5px; border-radius:14px; padding:2px 9px; cursor:pointer;
     user-select:text; -webkit-user-select:text; background:#e9f7f7; border:1px solid #b6e4e4; color:#14555a; }
@@ -529,9 +526,6 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .chip-info { font:inherit; font-size:10.5px; margin-left:5px; padding:0 5px; border-radius:8px;
     border:1px solid currentColor; background:rgba(255,255,255,.6); color:inherit; cursor:pointer; line-height:1.5; }
   .chip-info:hover { background:#fff; }
-  .chip-more { font:inherit; font-size:11.5px; margin-top:4px; padding:3px 10px; border-radius:12px;
-    border:1px solid #cfd8e3; background:#f7f9fc; color:#0a6ebd; cursor:pointer; }
-  .chip-more:hover { background:#eaf4fc; }
   /* click-through detail popup for a mode/event chip's full settings snapshot */
   .dm-overlay { position:fixed; inset:0; background:rgba(20,30,45,.45); z-index:200; padding:20px; }
   .dm-overlay:not([hidden]) { display:flex; align-items:center; justify-content:center; }
@@ -562,7 +556,6 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
 <header><h1>__DEVICE__</h1><div class="sub">set a range to zoom · drag the window inside · hover to read · click to lock · double-click a graph to focus it</div>
   <div class="ctl">
     <button class="other" type="button" id="ss-btn" title="Save the current window as two images: a wide diagram, and the alarms/events for this window">📷 Save images</button>
-    <a class="other" href="__WINDOWSHREF__" target="wa_windows">Windowed view ↗</a>
     __CHATLINK__
   </div></header>
 <div class="stats">
@@ -588,20 +581,29 @@ __NOTES__
 </div>
 
 <div class="viewset">
-  <span class="lbl">View settings:</span>
-  <input type="text" id="vs-name" placeholder="preset name, e.g. 'PIP overview'">
-  <button type="button" id="vs-save" title="Save the current Y-axis variables, centering, and overview trend variable">💾 Save</button>
-  <select id="vs-list"><option value="">— saved presets —</option></select>
-  <button type="button" id="vs-apply">Apply</button>
-  <button type="button" id="vs-delete" title="Delete the selected preset">🗑</button>
+  <span class="lbl">View:</span>
+  <input type="text" id="vs-name" placeholder="optional label, e.g. 'PIP overview'">
+  <span class="vs-scope">
+    <label title="Export every part of the current view"><input type="radio" name="vs-scope" value="all" id="vs-scope-all" checked> All</label>
+    <label title="Choose which parts of the current view to export"><input type="radio" name="vs-scope" value="sel" id="vs-scope-sel"> Selective</label>
+  </span>
+  <span class="vs-fields" id="vs-fields" hidden>
+    <label><input type="checkbox" id="vs-f-vars" checked> Y-axis variables</label>
+    <label><input type="checkbox" id="vs-f-center" checked> Centering</label>
+    <label><input type="checkbox" id="vs-f-ovvar" checked> Overview trend</label>
+    <label><input type="checkbox" id="vs-f-window" checked> Window/time range</label>
+  </span>
+  <button type="button" id="vs-export" title="Download the current view as a file — no save step, this always exports what's on screen right now; pick 'Selective' to export only some parts of it">⬇ Export view</button>
+  <button type="button" id="vs-import" title="Load one previously-exported view file and jump straight to it — a selective export only changes the parts it carries, leaving the rest as-is">⬆ Import view</button>
+  <input type="file" id="vs-import-file" accept="application/json" hidden>
   <span class="muted" id="vs-note" style="font-size:11px"></span>
 </div>
 
 <div class="controls">
-  <label class="q">Range start (zooms overview)
+  <label class="q">Window start
     <input type="datetime-local" id="q-start" step="1">
   </label>
-  <label class="q">Range end (zooms overview)
+  <label class="q">Window end
     <input type="datetime-local" id="q-end" step="1">
   </label>
   <button class="primary" id="q-apply">Set range</button>
@@ -641,7 +643,7 @@ __NOTES__
 <div style="font-size:11.5px;color:#5b6b7b;margin:4px 20px 0">Tip: use <b>←</b> / <b>→</b> to step the cursor through the data, or <b>Shift+←</b> / <b>Shift+→</b> to slide the whole window — hold either to move faster.</div>
 
 <div class="overview">
-  <div class="ov-h" id="ov-h">Overview — set a range to zoom, then drag the window inside it</div>
+  <div class="ov-h" id="ov-h">Overview — the whole log. Drag the highlighted window to move it, drag its edges to resize, click-drag anywhere else to select a new window, or type exact times below.</div>
   <div style="font-size:12px;color:#5b6b7b;margin:0 0 4px">Trend variable:
     <select id="ov-var" onchange="setOvVar(this.value)">__OVVAROPTS__</select></div>
   <div id="patient-legend" style="font-size:11.5px;color:#5b6b7b;margin:2px 0 4px"></div>
@@ -710,12 +712,12 @@ function patientBannerHTML(seg, note){
     +`<span style="font-weight:700;color:#0a6ebd;letter-spacing:.03em">${swatch}PATIENT</span>${items}${noteHtml}${link}</div>`;
 }
 // patient colour legend under the overview (only when >1 patient overall) —
-// filtered to the patients whose segment overlaps the current REGION, so
-// setting a range only lists the patient(s) actually in view.
+// filtered to the patients whose segment overlaps the current WINDOW, so
+// moving/resizing the window only lists the patient(s) actually in view.
 function renderPatientLegend(){
   const host=document.getElementById('patient-legend'); if(!host) return;
   if(PATIENTS.length<2){ host.innerHTML=''; return; }
-  const inView = PATIENTS.filter(s=>s.t1>=REGION.r0 && s.t0<=REGION.r1);
+  const inView = PATIENTS.filter(s=>s.t1>=SEL.t0 && s.t0<=SEL.t1);
   if(!inView.length){ host.innerHTML=''; return; }
   host.innerHTML = 'Patients: ' + inView.map(s=>
     `<span style="margin-right:10px;white-space:nowrap">${dot(s.color)}${esc(s.label)}</span>`).join('');
@@ -763,14 +765,17 @@ function updateFocusNote(){ const n=document.getElementById('focus-note'); if(!n
   if(FOCUS) n.innerHTML = `focused on <b>${esc(FOCUS)}</b> — the other graphs are shrunk`
     + `<button type="button" onclick="setFocus(null)">show all</button>`; }
 // --- overview geometry ---
-const OV_L = 70, OV_R = VB_W - 16, OV_TOP = 10, OV_CH = 66, OV_GAP = 6, OV_LANE = 9;
+const OV_L = 70, OV_R = VB_W - 16, OV_TOP = 10, OV_CH = 150, OV_GAP = 8, OV_LANE = 11;
 
 const TMIN = DATA.tMin, TMAX = DATA.tMax;                // full data bounds
 const MINW = 60000;                                     // smallest window = 1 minute
-// Two levels: REGION = the zoomed extent of the overview (set by the start/end
-// fields / Quick width / Full range / Alarm). WINDOW (SEL) = the draggable brush
-// inside REGION; the detail chart shows the window.
-let REGION = { r0: TMIN, r1: TMAX };
+// ONE moving thing: the overview always shows the WHOLE log (REGION is just
+// that fixed backdrop, permanently [TMIN,TMAX] — there is no separate "zoom"
+// step any more). SEL is the single draggable/resizable window inside it; the
+// detail chart shows SEL. REGION is kept only so ovX/ovT/regSpan (and the
+// alarm-only-window fallback axis) don't need a second code path — it never
+// changes after this.
+const REGION = { r0: TMIN, r1: TMAX };
 let SEL = { t0: TMIN, t1: TMIN };
 const CTRL = { locked:false };
 function regSpan(){ return Math.max(1, REGION.r1 - REGION.r0); }
@@ -789,6 +794,18 @@ function inputToMs(v){ if(!v) return null; const m=v.match(/(\d+)-(\d+)-(\d+)T(\
 function nearest(samples, t){ let lo=0, hi=samples.length-1; if(hi<0) return -1;
   while(lo<hi){ const m=(lo+hi)>>1; if(samples[m][0]<t) lo=m+1; else hi=m; }
   if(lo>0 && (t-samples[lo-1][0])<(samples[lo][0]-t)) return lo-1; return lo; }
+// the cyclic trend sample nearest time t, from the FULL dataset (not just
+// whatever window/downsampling is currently on screen) — null if the
+// nearest sample is farther than normal coverage (COVER_TOL), same rule
+// the hover readout uses to decide whether cyclic data actually exists
+// at a given moment.
+function nearestTrendSample(t){
+  if(!DATA.samples || !DATA.samples.length) return null;
+  const idx = nearest(DATA.samples, t);
+  if(idx < 0) return null;
+  const s = DATA.samples[idx];
+  return Math.abs(s[0]-t) <= COVER_TOL ? s : null;
+}
 function lowerBound(t){ let lo=0, hi=DATA.samples.length; while(lo<hi){ const m=(lo+hi)>>1;
   if(DATA.samples[m][0] < t) lo=m+1; else hi=m; } return lo; }
 
@@ -802,9 +819,10 @@ function onVarToggle(){
   buildOverview(); renderDetail();
 }
 
-// ============================ OVERVIEW (stock) ============================
-// The overview is zoomed to REGION; a draggable window (brush) inside it picks
-// the detail sub-range. Axis ticks span REGION, so the bottom dates match it.
+// ============================ OVERVIEW (timeline) ============================
+// The overview always spans the whole log (REGION, frozen at [TMIN,TMAX]); a
+// draggable/resizable window (SEL) inside it picks the detail sub-range —
+// the only thing that moves. Axis ticks span the whole log.
 function ovX(t){ return OV_L + (t-REGION.r0)/regSpan()*(OV_R-OV_L); }
 function ovT(x){ return REGION.r0 + (x-OV_L)/(OV_R-OV_L)*regSpan(); }
 function inRegion(t){ return t>=REGION.r0 && t<=REGION.r1; }
@@ -879,12 +897,27 @@ function buildOverview(){
   svg.innerHTML = p.join('');
 }
 function updateBrushRects(){
+  // NOTE: each element is looked up via its own literal getElementById('…')
+  // call — NOT a variable-mediated helper (`document.getElementById(id)`
+  // with `id` a parameter). The single-file merge (build_device_report_html
+  // -> _page_fragment) namespaces every element id (e.g. "ov-brush" ->
+  // "c-ov-brush") by rewriting literal id="…" attributes and literal
+  // getElementById('…') call text; it can't see through a helper that takes
+  // the id as a variable, so a lookup like that silently returns null in the
+  // merged page (the only page this app actually ships) and every one of
+  // these rects would stop updating after the very first draw — which is
+  // exactly the "window doesn't move" bug: setSel() kept computing the right
+  // window (the value/detail chart/date fields, all literal-id lookups,
+  // updated fine) but the highlighted rectangle itself was frozen at
+  // whatever buildOverview() drew before the very first setSel() ever ran.
   const x0=ovX(SEL.t0), x1=ovX(SEL.t1);
-  const set=(id,a,v)=>{ const el=document.getElementById(id); if(el) el.setAttribute(a,v); };
-  set('ov-dim-l','width',Math.max(0,x0-OV_L).toFixed(1));
-  set('ov-dim-r','x',x1.toFixed(1)); set('ov-dim-r','width',Math.max(0,OV_R-x1).toFixed(1));
-  set('ov-brush','x',x0.toFixed(1)); set('ov-brush','width',Math.max(3,x1-x0).toFixed(1));
-  set('ov-hl','x',(x0-3).toFixed(1)); set('ov-hr','x',(x1-3).toFixed(1));
+  const dl=document.getElementById('ov-dim-l'), dr=document.getElementById('ov-dim-r');
+  const br=document.getElementById('ov-brush'), hl=document.getElementById('ov-hl'), hr=document.getElementById('ov-hr');
+  if(dl) dl.setAttribute('width', Math.max(0,x0-OV_L).toFixed(1));
+  if(dr){ dr.setAttribute('x', x1.toFixed(1)); dr.setAttribute('width', Math.max(0,OV_R-x1).toFixed(1)); }
+  if(br){ br.setAttribute('x', x0.toFixed(1)); br.setAttribute('width', Math.max(3,x1-x0).toFixed(1)); }
+  if(hl) hl.setAttribute('x', (x0-3).toFixed(1));
+  if(hr) hr.setAttribute('x', (x1-3).toFixed(1));
 }
 (function(){
   const svg=document.getElementById('overview');
@@ -893,9 +926,17 @@ function updateBrushRects(){
   function evX(e){ const r=svg.getBoundingClientRect(); return (e.clientX-r.left)/r.width*VB_W; }
   svg.addEventListener('pointerdown', e=>{
     const x=evX(e), x0=ovX(SEL.t0), x1=ovX(SEL.t1), w=x1-x0;
+    // "move" only makes sense if the window has room to slide — when it
+    // already spans the whole overview (e.g. after "Full range"/"Whole
+    // range"), there's nowhere for a translate to go (it just clamps back to
+    // where it started, which looked like "the window doesn't move"). In
+    // that case a plain click-drag instead carves out a fresh, narrower
+    // window at the drag point — the same gesture works whether or not
+    // there's an existing narrower window to grab.
+    const canMove = w < (OV_R-OV_L-2);
     if(w>=16 && Math.abs(x-x0)<=5) mode='l';
     else if(w>=16 && Math.abs(x-x1)<=5) mode='r';
-    else if(x>=x0-6 && x<=x1+6){ mode='move'; grabOff=evT(e)-SEL.t0; }
+    else if(canMove && x>=x0-6 && x<=x1+6){ mode='move'; grabOff=evT(e)-SEL.t0; }
     else { mode='new'; anchor=evT(e); setSel(anchor, anchor+MINW); }
     svg.setPointerCapture(e.pointerId); e.preventDefault();
   });
@@ -912,9 +953,13 @@ function updateBrushRects(){
 })();
 
 // ============================ window (brush) state ============================
-// The window is the draggable brush inside REGION; the detail chart shows it.
-// setSel only moves the brush (updates its rects) — it does NOT re-zoom the
-// overview or touch the region fields.
+// SEL is the ONE draggable/resizable thing on the overview — the overview
+// itself always shows the whole log (REGION is frozen full-extent, see
+// above), so there's nothing else on screen that could look "stuck": if SEL
+// ever equalled the full width it would have no room to slide, which is the
+// "window isn't moving" bug this replaces. setSel also mirrors the window's
+// bounds into the Range start/end fields, so typing exact times and reading
+// back the current window use the same two fields.
 function setSel(t0, t1, skipDetail){
   t0=Math.max(REGION.r0, Math.min(t0, REGION.r1));
   t1=Math.max(REGION.r0, Math.min(t1, REGION.r1));
@@ -923,7 +968,9 @@ function setSel(t0, t1, skipDetail){
   updateBrushRects();
   const lbl=document.getElementById('span-lbl');
   lbl.innerHTML = `window <b>${fmtDateTime(t0)}</b> → <b>${fmtDateTime(t1)}</b> · ${fmtDur(t1-t0)}`;
-  updatePatientBanner();
+  const qs=document.getElementById('q-start'), qe=document.getElementById('q-end');
+  if(qs) qs.value = msToInput(t0); if(qe) qe.value = msToInput(t1);
+  updatePatientBanner(); renderPatientLegend();
   if(!skipDetail) renderDetail();
 }
 function unitMs(u){ return u==='min' ? 60000 : (u==='day' ? 86400000 : HOUR); }
@@ -951,28 +998,17 @@ function gotoAlarm(dir){
   if(b>REGION.r1){ b=REGION.r1; a=Math.max(REGION.r0, b-w); }
   setSel(a, b); setTimeout(()=>lockAt(target), 40);
 }
-// ============================ region (zoom) state ============================
-function updateRegionLbl(){
-  const h=document.getElementById('ov-h');
-  if(h) h.innerHTML = `Overview zoomed to <b>${fmtDateTime(REGION.r0)}</b> → <b>${fmtDateTime(REGION.r1)}</b> — drag the window inside (edges resize)`;
-}
+// ============================ typed-time window controls ============================
+// "Set range" / "Full range" (and the cross-tab ?from&to deep link, and the
+// Patients tab's "Open charts for this patient" link) all just move/resize
+// the ONE window now — the function name `applyRegion` is kept because it's
+// part of the exported cross-tab API (window.PAGES.charts), not because
+// there's still a region to apply.
 function applyRegion(a, b){
   a=Math.max(TMIN, Math.min(a, TMAX)); b=Math.max(TMIN, Math.min(b, TMAX));
   if(b<a){ const t=a; a=b; b=t; }
   if(b-a < MINW){ b=Math.min(TMAX, a+MINW); a=Math.max(TMIN, b-MINW); }
-  REGION.r0=a; REGION.r1=b;
-  document.getElementById('q-start').value = msToInput(a);
-  document.getElementById('q-end').value = msToInput(b);
-  updateRegionLbl(); buildOverview(); renderPatientLegend();
-  setSel(a, b);                 // window starts as the whole region; drag to narrow
-}
-function resetRegion(){
-  REGION.r0=TMIN; REGION.r1=TMAX;
-  document.getElementById('q-start').value = msToInput(TMIN);
-  document.getElementById('q-end').value = msToInput(TMAX);
-  document.getElementById('q-width').value = String(DATA.initialHours);
-  updateRegionLbl(); buildOverview(); renderPatientLegend();
-  setSel(TMIN, Math.min(TMAX, TMIN + DATA.initialHours*HOUR));
+  setSel(a, b);
 }
 document.getElementById('q-apply').addEventListener('click', ()=>{
   const a=inputToMs(document.getElementById('q-start').value);
@@ -980,29 +1016,33 @@ document.getElementById('q-apply').addEventListener('click', ()=>{
   if(a==null||b==null){ alert('Enter both a start and end date/time.'); return; }
   applyRegion(a, b);
 });
-document.getElementById('q-reset').addEventListener('click', resetRegion);
+document.getElementById('q-reset').addEventListener('click', ()=>applyRegion(TMIN, TMAX));
 document.getElementById('q-width-apply').addEventListener('click', applyCustomWidth);
 document.getElementById('q-width-n').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyCustomWidth(); } });
 document.getElementById('al-prev').addEventListener('click', ()=>gotoAlarm(-1));
 document.getElementById('al-next').addEventListener('click', ()=>gotoAlarm(1));
 
-// ============================ saved view-setting presets ============================
-// Fully offline/self-contained pages have no backend, so presets live in this
-// browser's localStorage (per-browser, not shared) — saves the *display*
-// preferences (Y-axis variables, centering, overview trend variable), not the
-// absolute time range, which is data-specific per report.
-const VS_KEY = 'cyclicViewSettings';
-function lsGet(k){ try{ return localStorage.getItem(k); } catch(e){ return null; } }
-function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; } catch(e){ return false; } }
-function loadViewSettings(){ try{ return JSON.parse(lsGet(VS_KEY)||'[]'); } catch(e){ return []; } }
-function vsNote(msg){ const n=document.getElementById('vs-note'); if(n) n.textContent=msg; }
-function refreshViewSettingsList(){
-  const sel=document.getElementById('vs-list'); if(!sel) return;
-  const cur=sel.value, list=loadViewSettings();
-  sel.innerHTML = '<option value="">— saved presets —</option>'
-    + list.map(p=>`<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
-  if(list.some(p=>p.name===cur)) sel.value=cur;
-}
+// ============================ view export / import ============================
+// A "view" (Y-axis variables, centering, overview trend variable, and the
+// window/time range you're looking at — the time range is *why* you'd want
+// this in the first place, not an afterthought) is a file, not a saved
+// setting. There's no "Save" step and nothing lives in browser storage:
+// Export always exports exactly what's on screen right now, one file at a
+// time; Import always applies exactly one file, immediately, rather than
+// merging into some stored collection you manage separately. That's a
+// deliberate simplification, not a missing feature — an earlier version
+// kept a named list in localStorage, but for a file opened straight off
+// disk (file://, the normal way this report is opened) that storage is
+// scoped to the file's *containing folder* by most browsers, so a "saved"
+// view from one report export was invisible from a different one — even in
+// the same browser on the same PC — which looked exactly like "it didn't
+// save". A file you export and re-import has no such ambiguity.
+//
+// Export additionally has an All/Selective scope: All (default) bundles
+// every part of the view, Selective lets you tick just the parts you want
+// (e.g. only the time window, without forcing the recipient onto your
+// Y-axis choice). applyViewSettingsObj only touches the fields present in
+// the file, so a selective import naturally leaves every other part alone.
 function applyViewSettingsObj(s){
   if(!s) return;
   if(s.vars && s.vars.length){
@@ -1017,46 +1057,86 @@ function applyViewSettingsObj(s){
   if(s.ovVar && ALLVARS.includes(s.ovVar)){ OVVAR=s.ovVar;
     const sel=document.getElementById('ov-var'); if(sel) sel.value=OVVAR; }
   if(FOCUS && !VARS.includes(FOCUS)){ FOCUS=null; updateFocusNote(); }
-  buildOverview(); renderDetail();
-}
-document.getElementById('vs-save').addEventListener('click', ()=>{
-  const name=(document.getElementById('vs-name').value||'').trim();
-  if(!name){ vsNote('enter a name first'); return; }
-  const list=loadViewSettings();
-  const s={name, vars:VARS.slice(), centerMode:CENTER_MODE, ovVar:OVVAR};
-  const i=list.findIndex(p=>p.name===name);
-  if(i>=0) list[i]=s; else list.push(s);
-  if(!lsSet(VS_KEY, JSON.stringify(list))){
-    vsNote("couldn't save — this browser blocks local storage for files opened this way");
-    return;
+  // the window/time range — jump straight back to the exact moment that was
+  // on screen when it was exported. A file that predates this (no t0/t1)
+  // just leaves the window where it is.
+  if(s.t0!=null && s.t1!=null && isFinite(s.t0) && isFinite(s.t1)){
+    applyRegion(s.t0, s.t1);
+  } else {
+    buildOverview(); renderDetail();
   }
-  refreshViewSettingsList();
-  document.getElementById('vs-list').value=name;
-  vsNote('saved'); setTimeout(()=>{ if(document.getElementById('vs-note').textContent==='saved') vsNote(''); }, 2000);
+}
+function vsNote(msg){ const n=document.getElementById('vs-note'); if(n) n.textContent=msg; }
+// "All" exports every part of the current view (the original behaviour).
+// "Selective" exports only the parts the user ticks — e.g. sharing just the
+// time window without forcing your Y-axis variable choice on the recipient,
+// or the reverse. Toggling the radio shows/hides the field checklist.
+document.querySelectorAll('input[name="vs-scope"]').forEach(r=>{
+  r.addEventListener('change', ()=>{
+    const sel = document.querySelector('input[name="vs-scope"]:checked').value === 'sel';
+    document.getElementById('vs-fields').hidden = !sel;
+  });
 });
-document.getElementById('vs-apply').addEventListener('click', ()=>{
-  const name=document.getElementById('vs-list').value; if(!name) return;
-  const s=loadViewSettings().find(p=>p.name===name);
-  if(s){ applyViewSettingsObj(s); vsNote('applied "'+name+'"'); }
+document.getElementById('vs-export').addEventListener('click', ()=>{
+  const name=(document.getElementById('vs-name').value||'').trim();
+  const all = document.querySelector('input[name="vs-scope"]:checked').value === 'all';
+  // NOTE: each checkbox is looked up by its own literal getElementById call
+  // (not a built-up 'vs-f-'+f string) — a dynamically-built id/lookup here
+  // would silently break once this page is namespaced into the merged
+  // single-file report (see _page_fragment's docstring on why only literal
+  // id="…"/getElementById(…) text gets renamed).
+  const wantVars = all || document.getElementById('vs-f-vars').checked;
+  const wantCenter = all || document.getElementById('vs-f-center').checked;
+  const wantOvvar = all || document.getElementById('vs-f-ovvar').checked;
+  const wantWindow = all || document.getElementById('vs-f-window').checked;
+  const s = {name: name||undefined};
+  if(wantVars) s.vars = VARS.slice();
+  if(wantCenter) s.centerMode = CENTER_MODE;
+  if(wantOvvar) s.ovVar = OVVAR;
+  if(wantWindow){ s.t0 = SEL.t0; s.t1 = SEL.t1; }
+  if(!all && s.vars===undefined && s.centerMode===undefined && s.ovVar===undefined && s.t0===undefined){
+    vsNote('pick at least one part to export'); return;
+  }
+  const blob=new Blob([JSON.stringify(s,null,2)], {type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url;
+  const slug=(name.replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'-')) || 'cyclic-view';
+  a.download=slug+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  const parts=[];
+  if(s.vars) parts.push(`${s.vars.length} variable${s.vars.length===1?'':'s'}`);
+  if(s.centerMode) parts.push('centering');
+  if(s.ovVar) parts.push('overview trend');
+  if(s.t0!=null) parts.push(`window ${fmtDateTime(s.t0)} → ${fmtDateTime(s.t1)}`);
+  vsNote(`exported — ${parts.join(', ')}`);
 });
-document.getElementById('vs-delete').addEventListener('click', ()=>{
-  const name=document.getElementById('vs-list').value; if(!name) return;
-  lsSet(VS_KEY, JSON.stringify(loadViewSettings().filter(p=>p.name!==name)));
-  refreshViewSettingsList(); vsNote('deleted');
+document.getElementById('vs-import').addEventListener('click', ()=>{
+  document.getElementById('vs-import-file').click();
 });
-refreshViewSettingsList();
+document.getElementById('vs-import-file').addEventListener('change', e=>{
+  const file=e.target.files[0]; e.target.value='';   // reset so picking the same file again still fires 'change'
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    let s;
+    try{
+      s=JSON.parse(reader.result);
+      if(Array.isArray(s)) s=s[0];   // tolerate an old-style multi-preset export — take the first
+      if(!s || typeof s!=='object') throw 0;
+    } catch(err){ vsNote('could not read that file — is it a view exported from ⬇ Export view?'); return; }
+    applyViewSettingsObj(s);
+    vsNote((s.t0!=null && s.t1!=null)
+      ? `imported${s.name?` "${esc(s.name)}"`:''} — jumped to ${fmtDateTime(s.t0)} → ${fmtDateTime(s.t1)}`
+      : `imported${s.name?` "${esc(s.name)}"`:''}`);
+  };
+  reader.readAsText(file);
+});
 
 // ---- jump the cursor to an exact date & time ----
 function gotoTime(t){
   if(t==null || isNaN(t)) return;
   t=Math.max(TMIN, Math.min(t, TMAX));
-  // widen the region to the full log if the searched time is outside the zoom
-  if(t < REGION.r0 || t > REGION.r1){
-    REGION.r0=TMIN; REGION.r1=TMAX;
-    document.getElementById('q-start').value=msToInput(TMIN);
-    document.getElementById('q-end').value=msToInput(TMAX);
-    updateRegionLbl(); buildOverview();
-  }
   // move the window (keep its width) to contain t, then lock the cursor there
   const w=Math.min(SEL.t1-SEL.t0, regSpan()); let a=Math.max(REGION.r0, t-w/2), b=a+w;
   if(b>REGION.r1){ b=REGION.r1; a=Math.max(REGION.r0, b-w); }
@@ -1093,7 +1173,13 @@ function arrowStep(dir){
 // acceleration-while-held pattern as the plain-arrow cursor stepper.
 const PANHOLD = { hold:0, dir:0 };
 function panWindow(dir){
-  const w = SEL.t1-SEL.t0;
+  let w = SEL.t1-SEL.t0;
+  // Sliding only makes sense if the window has room to move — when it
+  // already spans the whole log (e.g. after "Full range"/"Whole range")
+  // there's nowhere to slide it TO, so a-clamped-to-b silently no-ops. Same
+  // fix as the overview drag: fall back to a sane width instead of doing
+  // nothing, so Shift+←/→ always visibly does something.
+  if(w >= regSpan()) w = Math.min(regSpan(), DATA.initialHours*HOUR);
   const step = PANHOLD.hold<4 ? 0.15 : PANHOLD.hold<12 ? 0.4 : 0.8;   // fraction of window width
   let a = SEL.t0 + dir*step*w, b = a+w;
   a = Math.max(REGION.r0, Math.min(a, REGION.r1-w));
@@ -1155,6 +1241,22 @@ function renderDetail(){
   buildLedger(win);
   buildStats(win);
   CTRL.hasChart=true;
+}
+// SVG text doesn't wrap or ellipsize on its own — a long alarm-type name in
+// the narrow left-margin lane label (e.g. "Exhalation Flow Sensor Fault",
+// "Check Patient Circuit Reconnection Failure") would otherwise extend past
+// x=0 and get clipped by the canvas edge from the FRONT (losing its first
+// few letters, e.g. "eck Patient Circuit"), not the end, since the label is
+// right-anchored. Truncate from the end with an ellipsis instead, so nothing
+// ever runs off-canvas; the full name is still available as a hover tooltip
+// and in the "Alarms in this window" list below the chart. CHAR_W is a
+// measured average glyph width for this label's font-size (8) in the page's
+// font, not a guess — calibrated against real rendered text.
+const LANE_LABEL_CHAR_W = 3.6;
+function truncLabel(s, maxW){
+  if(s.length*LANE_LABEL_CHAR_W <= maxW) return s;
+  const n = Math.max(1, Math.floor(maxW/LANE_LABEL_CHAR_W) - 1);   // room for the trailing "…"
+  return s.slice(0, n) + '…';
 }
 function buildChart(win){
   const svg = document.getElementById('chart-d');
@@ -1241,9 +1343,10 @@ function buildChart(win){
     parts.push(`<text x="${(plotL0+beforeR)/2}" y="${panelsBottom+14}" text-anchor="middle" font-size="8" `
       + `font-style="italic" fill="#a05a00">history</text>`);
   }
-  if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = mTop + modeLaneH + r*LANE_ROW + LANE_ROW/2;
+  if(alarmTypes.length){ const lblMaxW = plotL0 - 8;   // budget before the label's left edge hits x=0
+    alarmTypes.forEach((typ,r)=>{ const y = mTop + modeLaneH + r*LANE_ROW + LANE_ROW/2;
     const col = DATA.alarmColors[typ] || '#888';
-    parts.push(`<text x="${plotL0-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(typ)}</text>`);
+    parts.push(`<text x="${plotL0-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(truncLabel(typ, lblMaxW))}<title>${esc(typ)}</title></text>`);
     // one bar per active interval (Activated→Deactivated) of this alarm type —
     // split across the before/after strips when an interval spans the boundary
     for(const ev of win.alarms){ if(ev[2]!==typ) continue;
@@ -1326,6 +1429,13 @@ function buildChart(win){
         parts.push(`<rect x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${Math.max(1.5,x1-x0).toFixed(1)}" height="${hgt.toFixed(1)}" fill="${col}" fill-opacity="0.85"><title>${esc(m[2])} · ${fmtDateTime(m[0])} → ${fmtDateTime(m[1])} (${fmtDur(m[1]-m[0])})</title></rect>`);
       }
     }
+  }
+  // a faint rule between the mode row and the alarm-type rows below it — on
+  // their own the two stacked lanes read as one undifferentiated list of
+  // names; this makes clear "mode" is its own row, not the first alarm.
+  if(modeLaneH && alarmLaneH){
+    const sepY = mTop + modeLaneH;
+    parts.push(`<line x1="${plotL0}" y1="${sepY}" x2="${plotR}" y2="${sepY}" stroke="#e3e8ee" stroke-width="0.6"/>`);
   }
   // settings/data-change events: teal ticks along the top, plus a tick below the
   // time/date axis that lines up with the titles listed below the chart
@@ -1417,48 +1527,58 @@ function modeChipHTML(m, idx){   // m = [start, end, label, settings]; win.modes
     + `<b style="color:${col}">${fmtDate(m[0])} ${fmtTime(m[0])} → ${endStr}</b>`
     + ` <span style="color:#5b6b7b">${fmtDur(m[1]-m[0])}</span> ${esc(m[2])}${info}</span>`;
 }
-// caps a chip group to CHIP_CAP with a "Show all N ▾" toggle, so a window
-// with hundreds of alarms/events doesn't dump a huge wall of chips by default
-// but every one of them is still reachable.
-const CHIP_CAP = 20;
-function chipsBlock(htmlArr, groupId){
+// renders every chip in the group — no cap, no "Show all" toggle; the
+// <details> section around each group (see ledgerSection) is what keeps a
+// window with hundreds of alarms/events from dumping a wall of chips by
+// default (collapse the section instead of hiding chips within it).
+function chipsBlock(htmlArr){
   if(!htmlArr.length) return '';
-  if(htmlArr.length <= CHIP_CAP) return `<div class="chips">${htmlArr.join('')}</div>`;
-  const shown = htmlArr.slice(0, CHIP_CAP).join('');
-  const rest = htmlArr.slice(CHIP_CAP).join('');
-  return `<div class="chips" id="chips-${groupId}-a">${shown}</div>`
-    + `<div class="chips" id="chips-${groupId}-b" hidden>${rest}</div>`
-    + `<button type="button" class="chip-more" id="more-${groupId}" data-n="${htmlArr.length}"`
-    + ` onclick="toggleChips('${groupId}')">Show all ${htmlArr.length} ▾</button>`;
+  return `<div class="chips">${htmlArr.join('')}</div>`;
 }
-function toggleChips(groupId){
-  const b=document.getElementById('chips-'+groupId+'-b'), btn=document.getElementById('more-'+groupId);
-  if(!b || !btn) return;
-  const willShow = b.hidden;
-  b.hidden = !willShow;
-  btn.textContent = willShow ? 'Show fewer ▲' : ('Show all '+btn.dataset.n+' ▾');
+// Each of Alarms / Events / Mode changes is its own <details> section —
+// open by default, collapsible independently of the others.
+function ledgerSection(title, hint, count, bodyHtml){
+  return `<details class="ledger-sec" open><summary class="ledger-h">${title} — <b>${count}</b>`
+    + `${hint?` <span>· ${hint}</span>`:''}</summary>${bodyHtml}</details>`;
 }
 function buildLedger(win){
   const host=document.getElementById('ledger-d'); if(!host) return;
-  let h = `<div class="ledger-h">Alarms in this window — <b>${win.alarms.length}</b>`
-    + ` · click one to jump to it</div>`;
-  h += win.alarms.length ? chipsBlock(win.alarms.map(a=>alarmChipHTML(a)), 'al')
-                         : `<div class="chips"><span class="muted">no alarms in this window</span></div>`;
-  h += `<div class="ledger-h" style="margin-top:7px">Events — <b>${win.events.length}</b>`
-    + ` · click a title to jump the cursor there · ⓘ for full settings · text is selectable</div>`;
-  h += win.events.length ? chipsBlock(win.events.map((e,i)=>chipHTML(e[0], e[1], 'ev', i)), 'ev')
-                         : `<div class="chips"><span class="muted">no logged events in this window</span></div>`;
+  const alBody = win.alarms.length ? chipsBlock(win.alarms.map(a=>alarmChipHTML(a)))
+                                    : `<div class="chips"><span class="muted">no alarms in this window</span></div>`;
+  let h = ledgerSection('Alarms', 'click one to jump to it', win.alarms.length, alBody);
+  const evBody = win.events.length ? chipsBlock(win.events.map((e,i)=>chipHTML(e[0], e[1], 'ev', i)))
+                                    : `<div class="chips"><span class="muted">no logged events in this window</span></div>`;
+  h += ledgerSection('Events', 'click a title to jump the cursor there · ⓘ for full settings · text is selectable', win.events.length, evBody);
   if(win.modes.length){
-    h += `<div class="ledger-h" style="margin-top:7px">Mode changes — <b>${win.modes.length}</b> · ⓘ for full settings</div>`;
-    h += chipsBlock(win.modes.map((m,i)=>modeChipHTML(m, i)), 'mo');
+    const moBody = chipsBlock(win.modes.map((m,i)=>modeChipHTML(m, i)));
+    h += ledgerSection('Mode changes', 'ⓘ for full settings', win.modes.length, moBody);
   }
   host.innerHTML = h;
 }
 // ============ mode/event detail popup (settings, alarms, current behaviour) ============
-function fmtSettingsRows(settings){
-  const keys = settings ? Object.keys(settings) : [];
-  if(!keys.length) return `<tr><td colspan="2" class="muted" style="border:0">no settings snapshot recorded for this entry</td></tr>`;
-  return keys.map(k=>`<tr><td class="k">${esc(k)}</td><td class="v">${esc(settings[k])}</td></tr>`).join('');
+// Every Log-CSV row's snapshot (`settings`, from alarms.py's `_row_settings`)
+// is one flat dict of whatever columns that export carries — both the
+// device's SET values (PIP, RR, I:E, PEEP, FIO2, VT, PIP Max, PEEP Min, …)
+// and, on many exports, a simultaneous "Cyc. *"-prefixed copy of the cyclic
+// reading logged alongside it (Cyc. PIP, Cyc. VTi, Cyc. Cdyn, …). Both kinds
+// come from the SAME Log file — but they answer different questions: the
+// "Cyc. *" ones are a point-in-time echo of the cyclic trend data (the same
+// variables plotted from the separate CyclicData file, above), while the
+// rest are the device's actual configured settings at that moment. Split
+// them into two clearly-labelled tables instead of one undifferentiated
+// dump — this is by column NAME (a "Cyc. " prefix), not a hard-coded list,
+// so it still works on an export with a different column set.
+function splitSettings(settings){
+  const setVals={}, cycVals={};
+  for(const k in (settings||{})){
+    if(k.startsWith('Cyc.')) cycVals[k]=settings[k]; else setVals[k]=settings[k];
+  }
+  return {setVals, cycVals};
+}
+function fmtSettingsRows(vals, emptyMsg){
+  const keys = vals ? Object.keys(vals) : [];
+  if(!keys.length) return `<tr><td colspan="2" class="muted" style="border:0">${esc(emptyMsg||'none recorded for this entry')}</td></tr>`;
+  return keys.map(k=>`<tr><td class="k">${esc(k)}</td><td class="v">${esc(vals[k])}</td></tr>`).join('');
 }
 function showDetailModal(kind, idx){    // idx into CTRL.win.modes / .events (chip click)
   const win = CTRL.win; if(!win) return;
@@ -1471,8 +1591,6 @@ function renderDetailModal(kind, entry){    // entry = the raw [.,.,...] array i
   const t1 = isMode ? entry[1] : null;
   const label = isMode ? entry[2] : entry[1];
   const settings = isMode ? entry[3] : entry[2];
-  // alarms active at this instant (or overlapping this mode's whole span)
-  const activeAlarms = DATA.alarms.filter(a => t0<=a[1] && (t1==null?t0:t1)>=a[0]);
   let body = `<div class="dm-h"><b>${esc(label)}</b><br>`
     + (isMode ? `${fmtDateTime(t0)} → ${fmtDateTime(t1)} <span class="muted">(${fmtDur(t1-t0)})</span>`
               : fmtDateTime(t0))
@@ -1482,14 +1600,36 @@ function renderDetailModal(kind, entry){    // entry = the raw [.,.,...] array i
     body += `<div class="dm-row"><span class="k">Ventilation mode at this time</span>`
       + `<span class="v">${esc(cm||'—')}</span></div>`;
   }
-  body += `<div class="dm-sec">Settings / readings on this log entry</div>`
-    + `<table class="dm-t">${fmtSettingsRows(settings)}</table>`;
-  body += `<div class="dm-sec">Alarms active at this time (${activeAlarms.length})</div>`;
-  body += activeAlarms.length
-    ? `<table class="dm-t">` + activeAlarms.map(a=>`<tr><td class="k" `
-        + `style="color:${DATA.alarmColors[a[2]]||'#888'}">${esc(a[2])}</td>`
-        + `<td class="v">${fmtDateTime(a[0])} → ${fmtDateTime(a[1])}</td></tr>`).join('') + `</table>`
-    : `<p class="muted" style="font-size:12px;margin:4px 0">none</p>`;
+  const {setVals, cycVals} = splitSettings(settings);
+  body += `<div class="dm-sec">Set values <span class="muted" style="font-weight:400">— device settings, from the log file</span></div>`
+    + `<table class="dm-t">${fmtSettingsRows(setVals, 'no set values recorded for this entry')}</table>`;
+  const hasCyc = cycVals && Object.keys(cycVals).length;
+  body += `<div class="dm-sec">Cyclic readings <span class="muted" style="font-weight:400">— the "Cyc." snapshot logged with this entry</span></div>`
+    + `<table class="dm-t">${fmtSettingsRows(cycVals,
+        'the device didn\'t echo a cyclic snapshot on this particular log entry — normal for most entry types; it mainly appears on "Standby Mode Activated" (the moment active ventilation stops)')}</table>`;
+  // This entry's own Log-row "Cyc." echo is usually blank (see above) — but
+  // that's a different, much sparser thing from the actual cyclic trend
+  // (the CyclicData file the graphs are plotted from, sampled every few
+  // seconds almost everywhere). Rather than just pointing up at "the graphs
+  // above" in prose, show the real numbers: the nearest trend sample to
+  // this entry's own timestamp, when one exists within normal sample-gap
+  // coverage — the same data + tolerance the hover readout uses.
+  if(!hasCyc){
+    const trend = nearestTrendSample(t0);
+    if(trend){
+      const rows = ALLVARS.map(v=>{
+        const val = trend[COL[v]];
+        return val==null ? '' : `<tr><td class="k">${esc(v)}</td><td class="v">${esc(val)}${UNITS[v]?` <span class="muted">${esc(UNITS[v])}</span>`:''}</td></tr>`;
+      }).join('');
+      if(rows){
+        const gap = Math.abs(trend[0]-t0);
+        body += `<div class="dm-sec">Nearest cyclic trend sample <span class="muted" style="font-weight:400">`
+          + `— from the cyclic data file (not this log row's own echo), at ${fmtTime(trend[0])}`
+          + `${gap>1000?` (${fmtDur(gap)} away)`:''}</span></div>`
+          + `<table class="dm-t">${rows}</table>`;
+      }
+    }
+  }
   document.getElementById('dm-body').innerHTML = body;
   document.getElementById('detail-modal').hidden = false;
 }
@@ -1806,19 +1946,17 @@ function lockAt(ts, noScroll, exact){ if(!CTRL.win) return; CTRL.locked=true;
   const card=document.getElementById('card-d'); if(card) card.scrollIntoView({behavior:'smooth', block:'center'}); }
 
 // ============================ init ============================
-// Region defaults to the full log; the window (brush) defaults to the first
-// `initialHours`. A ?t=<ms> deep-link centres the window on that moment.
-document.getElementById('q-start').value = msToInput(TMIN);
-document.getElementById('q-end').value = msToInput(TMAX);
+// The overview always shows the whole log; the window (brush) defaults to
+// the first `initialHours`. A ?t=<ms> deep-link centres the window on that
+// moment; a ?from&to= deep-link (a patient segment) sets the window to that
+// exact span.
 document.getElementById('q-width').value = String(DATA.initialHours);
-updateRegionLbl();
-renderPatientLegend();
 buildOverview();
 (function(){
   const p=new URLSearchParams(location.search);
   const t=p.get('t'), from=p.get('from'), to=p.get('to');
   if(from!=null && to!=null && !isNaN(+from) && !isNaN(+to)){
-    // a patient segment: zoom the overview to [from,to] and show the whole span
+    // a patient segment: move the window to [from,to]
     applyRegion(+from, +to);
   } else if(t!=null && !isNaN(+t)){
     const w=DATA.initialHours*HOUR; let a=Math.max(TMIN,(+t)-w/2), b=a+w;
