@@ -412,11 +412,15 @@ function patientBannerHTML(seg, note){
     +`border:1px solid #cfe4f7;border-radius:10px;padding:8px 14px;margin:12px 20px 0;font-size:13px">`
     +`<span style="font-weight:700;color:#0a6ebd;letter-spacing:.03em">${swatch}PATIENT</span>${items}${noteHtml}${link}</div>`;
 }
-// patient colour legend under the overview (only when >1 patient)
+// patient colour legend under the overview (only when >1 patient overall) —
+// filtered to the patients whose segment overlaps the current REGION, so
+// setting a range only lists the patient(s) actually in view.
 function renderPatientLegend(){
   const host=document.getElementById('patient-legend'); if(!host) return;
   if(PATIENTS.length<2){ host.innerHTML=''; return; }
-  host.innerHTML = 'Patients: ' + PATIENTS.map(s=>
+  const inView = PATIENTS.filter(s=>s.t1>=REGION.r0 && s.t0<=REGION.r1);
+  if(!inView.length){ host.innerHTML=''; return; }
+  host.innerHTML = 'Patients: ' + inView.map(s=>
     `<span style="margin-right:10px;white-space:nowrap">${dot(s.color)}${esc(s.label)}</span>`).join('');
 }
 function updatePatientBanner(){
@@ -439,7 +443,9 @@ const IDX_TOP_H = 20;   // room above the panels for the top INDEX axis
 // "Before" strip: when cyclic data starts partway through a window, this many
 // px on the left (before the main plot) is given its own linear time axis for
 // the pre-cyclic alarm/event history — otherwise it collapses to one pixel.
-const BEFORE_W = 60, BEFORE_GAP = 44;
+// No gap to the main plot: they sit flush (separated only by the boundary
+// line drawn at plotL) so dragging/hovering across the join stays smooth.
+const BEFORE_W = 60, BEFORE_GAP = 0;
 const ALARM_SNAP_PX = 8;   // cursor within this many px of an alarm snaps onto it
 // Typical cyclic sampling gap (median of consecutive sample diffs). A cursor time
 // farther than COVER_TOL from any sample is treated as "no cyclic data here" — the
@@ -653,7 +659,7 @@ function applyRegion(a, b){
   REGION.r0=a; REGION.r1=b;
   document.getElementById('q-start').value = msToInput(a);
   document.getElementById('q-end').value = msToInput(b);
-  updateRegionLbl(); buildOverview();
+  updateRegionLbl(); buildOverview(); renderPatientLegend();
   setSel(a, b);                 // window starts as the whole region; drag to narrow
 }
 function resetRegion(){
@@ -661,7 +667,7 @@ function resetRegion(){
   document.getElementById('q-start').value = msToInput(TMIN);
   document.getElementById('q-end').value = msToInput(TMAX);
   document.getElementById('q-width').value = String(DATA.initialHours);
-  updateRegionLbl(); buildOverview();
+  updateRegionLbl(); buildOverview(); renderPatientLegend();
   setSel(TMIN, Math.min(TMAX, TMIN + DATA.initialHours*HOUR));
 }
 document.getElementById('q-apply').addEventListener('click', ()=>{

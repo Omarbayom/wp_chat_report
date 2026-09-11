@@ -250,7 +250,9 @@ const IDX_TOP_H = 20;   // room above the panels for the top INDEX axis
 // "Before" strip: when cyclic data starts partway through a window, this many
 // px on the left (before the main plot) is given its own linear time axis for
 // the pre-cyclic alarm/event history — otherwise it collapses to one pixel.
-const BEFORE_W = 60, BEFORE_GAP = 44;
+// No gap to the main plot: they sit flush (separated only by the boundary
+// line) so dragging/hovering across the join stays smooth.
+const BEFORE_W = 60, BEFORE_GAP = 0;
 const ALARM_SNAP_PX = 8;   // cursor within this many px of an alarm snaps onto it
 const ALLVARS = DATA.vars, UNITS = DATA.units;
 // Typical cyclic sampling gap; farther than COVER_TOL from any sample = "no data here".

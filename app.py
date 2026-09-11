@@ -52,6 +52,42 @@ from wa_report.cyclic_report import (
 )
 
 
+_README_TXT_NAME = "README - read this first.txt"
+
+
+def _linked_pages_readme(pages: dict[str, str]) -> str:
+    """Plain-text instructions bundled inside the ZIP.
+
+    The pages cross-link by plain relative filename (``charts.html`` ->
+    ``windows.html`` etc.), so they only resolve when all the files are
+    sitting in the *same* real folder. The most common way that breaks: on
+    Windows/macOS you can double-click a file straight out of a ZIP's built-in
+    preview without ever extracting it — the OS then silently pulls out just
+    that ONE file into a private temp folder, so every link to the other pages
+    404s. This note exists so that failure mode doesn't look like a bug.
+    """
+    names = ", ".join(sorted(pages))
+    return (
+        "HOW TO OPEN THIS REPORT\n"
+        "========================\n\n"
+        "This ZIP holds several linked web pages: " + names + ".\n"
+        "They open each other by name, so they only work when they are all\n"
+        "sitting together in one real folder on disk.\n\n"
+        "1. Right-click the downloaded ZIP file and choose \"Extract All\"\n"
+        "   (Windows) or double-click it in Finder (macOS) to unpack it into\n"
+        "   its own folder.\n"
+        "2. Open that extracted folder and double-click one of the .html\n"
+        "   files (charts.html or report.html) from there.\n\n"
+        "Do NOT open a page directly from inside the ZIP's own preview window\n"
+        "(the one you get without extracting first) — Windows/macOS will\n"
+        "quietly copy out only that single file to a temporary folder, and\n"
+        "every link to the other pages will then fail to open.\n\n"
+        "Do this on every computer the report is shared with — extracting it\n"
+        "once on your own machine does not carry over when you re-zip or\n"
+        "re-send just one .html file.\n"
+    )
+
+
 def _save_uploads_to_tempdir(uploads: list[tuple[str, bytes]], prefix: str) -> Path:
     """Write uploaded ZIP(s) into a fresh temp folder and return it.
 
@@ -257,6 +293,7 @@ if submitted:
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 for name, html_str in pages.items():
                     zf.writestr(name, html_str)
+                zf.writestr(_README_TXT_NAME, _linked_pages_readme(pages))
             sizes = " + ".join(f"{name} ({len(h) // 1024} KB)"
                                for name, h in pages.items())
             n = len(pages)
@@ -266,11 +303,18 @@ if submitted:
                 data=buf.getvalue(), file_name="linked_report.zip",
                 mime="application/zip",
             )
-            st.caption(
-                "Preview of the stock overview (charts.html). Its cross-links to the "
-                "windowed / chat / patient pages work once the ZIP is extracted into "
-                "one folder."
+            st.warning(
+                "⚠️ **Extract the whole ZIP into one folder before opening anything.** "
+                "The pages link to each other by filename, so they only find each "
+                "other when they sit **side by side on disk**. Right-click the "
+                "downloaded ZIP → **Extract All** (don't double-click a page straight "
+                "out of the ZIP's file-explorer preview — Windows/macOS then pulls out "
+                "only that one file into a temporary folder on its own, and every link "
+                "to the other pages breaks). Do this on every computer that opens the "
+                "report, not just this one. See the included README.txt for the same "
+                "steps."
             )
+            st.caption("Preview of the stock overview (charts.html) below.")
             components.html(pages["charts.html"], height=760, scrolling=True)
 
         # --- Word report ---

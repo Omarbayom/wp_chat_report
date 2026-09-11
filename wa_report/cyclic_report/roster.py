@@ -47,29 +47,23 @@ def assemble_roster(preamble, add_ms, sample_ms, alarm_ms, t_min, t_max,
     """Build the per-patient roster (pure computation, no I/O).
 
     *preamble* = the current patient's ``[(label,value)]`` (may be empty). *add_ms*
-    = ``Add New Patient`` times. *sample_ms* / *alarm_ms* = ascending ms arrays.
-    *log_start* = first log-entry time (falls back to ``alarm_ms[0]``).
+    = ``Add New Patient`` times. *sample_ms* / *alarm_ms* = ascending ms arrays,
+    used only for each segment's sample/alarm counts. *log_start* is unused (kept
+    for backward-compat call signatures).
 
-    A new patient segment **begins** at any of three events:
-      1. an ``Add New Patient`` log row (a handover);
-      2. the **beginning of the logs** (first log entry);
-      3. the **beginning of the cyclic data** (first cyclic sample).
-
-    So the pre-cyclic, alarm-only stretch and the first cyclic patient become
-    separate segments even without an explicit handover between them. Returns a
-    list of segment dicts (chronological); empty when there is nothing to split
-    (a single unnamed patient, one continuous start)."""
+    A new patient segment **begins only at an actual ``Add New Patient`` log
+    row** (a real handover). The logs and the cyclic data commonly don't start
+    at the same instant (e.g. alarms are recorded slightly before cyclic
+    sampling begins) — that gap is **not** a patient change, so it no longer
+    creates its own segment; the whole stretch from the timeline start to the
+    first real handover (or to the end, if there is none) is one patient. This
+    keeps a segment's displayed date range aligned with the actual Add New
+    Patient log entries whenever the log and cyclic data cover the same
+    session. Returns a list of segment dicts (chronological); empty when there
+    is nothing to split (a single unnamed patient, one continuous start)."""
     add_ms = sorted(m for m in add_ms if t_min < m < t_max)
-    # segment start points (deduped, inside the timeline) — the 3 conditions
-    starts = {t_min}
-    if log_start is None and alarm_ms:
-        log_start = alarm_ms[0]
-    if log_start is not None and t_min <= log_start < t_max:
-        starts.add(log_start)                         # 2. beginning of the logs
-    if sample_ms and t_min <= sample_ms[0] < t_max:
-        starts.add(sample_ms[0])                      # 3. beginning of the cyclic data
-    starts.update(add_ms)                             # 1. Add New Patient handovers
-    starts = sorted(starts)
+    # segment start points: the timeline start + every real handover
+    starts = sorted({t_min} | set(add_ms))
     if len(starts) <= 1 and not add_ms and not preamble:
         return []
     edges = starts + [t_max]
