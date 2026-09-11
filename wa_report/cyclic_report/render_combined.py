@@ -15,10 +15,10 @@ import pandas as pd
 
 from .. import media
 from ..parser import load_and_merge
-from .alarms import (load_alarm_intervals, load_alarm_limits, load_log_events,
+from .alarms import (load_alarm_intervals, load_alarm_limits, load_log_entries,
                      load_patient_add_events)
 from .bursts import detect_bulk_events
-from .config import ALARM_COLORS, DEFAULT_VARIABLES, VARIABLE_UNITS
+from .config import ALARM_COLORS, DEFAULT_VARIABLES, MODE_COLOR_PALETTE, VARIABLE_UNITS
 from .data_loader import load_cyclic, load_modes
 from .patient import load_patient_info
 from .roster import assemble_roster
@@ -70,8 +70,8 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
         default_sel = present[:3]
 
     alarms = load_alarm_intervals(alarms_source)   # Activated→Deactivated intervals
-    modes = load_modes(cyclic_source)              # ventilation-mode changes
-    events_df = load_log_events(alarms_source)     # settings/data-change events
+    cyclic_modes = load_modes(cyclic_source)       # mode changes seen in the cyclic CSV
+    log_entries = load_log_entries(alarms_source)  # non-alarm Log rows: mode | event, + settings
     limits = load_alarm_limits(alarms_source)      # alarm-limit setting changes
     # The chat is optional: with no folders there are simply no photo bursts.
     img_times = []
@@ -97,9 +97,16 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
     alarms_flat = ([[_ms(s), _ms(e), a] for s, e, a in
                     zip(alarms["Start"], alarms["End"], alarms["Alarm"])]
                    if not alarms.empty else [])
-    modes_flat = [[_ms(dt), name] for dt, name in modes]
-    events_flat = ([[_ms(dt), ev] for dt, ev in zip(events_df["DateTime"], events_df["Event"])]
-                   if not events_df.empty else [])
+    if log_entries.empty:
+        event_rows = mode_rows = log_entries
+    else:
+        event_rows = log_entries[log_entries["Kind"] == "event"]
+        mode_rows = log_entries[log_entries["Kind"] == "mode"]
+    # events are [ms, text, settings] points ("settings" = that log row's full
+    # set-value/limit/simultaneous-cyclic-reading snapshot, for the detail popup)
+    events_flat = ([[_ms(dt), txt, settings] for dt, txt, settings in
+                    zip(event_rows["DateTime"], event_rows["Text"], event_rows["Settings"])]
+                   if not event_rows.empty else [])
     limits_flat = [[_ms(dt), snap] for dt, snap in limits]
     # stable variable order: first-seen order across the change points
     limit_vars: list = []
@@ -116,27 +123,58 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
         bursts_flat = [[_ms(e.start), e.count, f"img-{_ms(e.start)}"]
                        for e in events if s_min <= _ms(e.start) <= s_max]
 
+    # Merge cyclic-CSV mode-change points with log-sourced "mode" rows (Log
+    # entries whose text names a mode — see load_log_entries) into one
+    # time-sorted timeline; log-sourced points carry a settings snapshot,
+    # cyclic-sourced ones don't (no Log row backs them). Consecutive points
+    # with the same label collapse to the first — the same rule load_modes
+    # already applies to its own (cyclic-only) source — but a settings
+    # snapshot from a dropped duplicate is kept on the surviving point.
+    mode_points_raw = [(_ms(dt), name, None) for dt, name in cyclic_modes]
+    if not mode_rows.empty:
+        mode_points_raw += [[_ms(dt), txt, settings] for dt, txt, settings in
+                            zip(mode_rows["DateTime"], mode_rows["Text"], mode_rows["Settings"])]
+    mode_points_raw.sort(key=lambda p: p[0])
+    mode_points: list = []
+    for ms, label, settings in mode_points_raw:
+        if mode_points and mode_points[-1][1] == label:
+            if mode_points[-1][2] is None and settings is not None:
+                mode_points[-1] = (mode_points[-1][0], label, settings)
+        else:
+            mode_points.append((ms, label, settings))
+
     all_ms = (list(dts) + [a[0] for a in alarms_flat] + [a[1] for a in alarms_flat]
-              + [e[0] for e in events_flat] + [m[0] for m in modes_flat])
+              + [e[0] for e in events_flat] + [m[0] for m in mode_points])
     t_min = min(all_ms) if all_ms else 0
     t_max = max(all_ms) if all_ms else 0
+
+    # modes as [start_ms, end_ms, label, settings] intervals — active from one
+    # mode point to the next (or to t_max for the last) — rendered as a
+    # swim-lane, the same way alarms already are.
+    modes_flat = []
+    for i, (ms, label, settings) in enumerate(mode_points):
+        end = mode_points[i + 1][0] if i + 1 < len(mode_points) else t_max
+        modes_flat.append([ms, end, label, settings])
+    mode_labels: list = []
+    for _, label, _ in mode_points:
+        if label not in mode_labels:
+            mode_labels.append(label)
+    mode_colors = {label: MODE_COLOR_PALETTE[i % len(MODE_COLOR_PALETTE)]
+                   for i, label in enumerate(mode_labels)}
 
     # Per-patient roster: split the log at each "Add New Patient" handover. The
     # last segment is the current patient (preamble); earlier ones get b1/b2/…
     patient_pairs = load_patient_info(cyclic_source)
     add_ms = [_ms(t) for t in load_patient_add_events(alarms_source)]
-    # beginning of the logs = earliest log row of any kind (alarms + events)
-    log_times = [a[0] for a in alarms_flat] + [e[0] for e in events_flat]
-    log_start = min(log_times) if log_times else None
     patients = assemble_roster(patient_pairs, add_ms, list(dts),
-                               [a[0] for a in alarms_flat], t_min, t_max,
-                               log_start=log_start)
+                               [a[0] for a in alarms_flat], t_min, t_max)
 
     payload = {
         "vars": present,
         "defaultVars": default_sel,
         "units": {v: VARIABLE_UNITS.get(v, "") for v in present},
         "alarmColors": ALARM_COLORS,
+        "modeColors": mode_colors,
         "samples": samples, "alarms": alarms_flat, "bursts": bursts_flat,
         "modes": modes_flat, "events": events_flat,
         "limits": limits_flat, "limitVars": limit_vars,

@@ -150,6 +150,86 @@ def load_log_events(source) -> pd.DataFrame:
     )
 
 
+_MODE_RE = re.compile(r"mode", re.I)
+_LOG_META_COLS = {"id", "date", "alarm", "status"}
+
+
+def _native(v):
+    """A numpy scalar (int64/float64/bool_/...) -> the equivalent plain
+    Python value, so it's JSON-serialisable; anything else is passed through
+    unchanged."""
+    if hasattr(v, "item"):
+        try:
+            return v.item()
+        except Exception:
+            pass
+    return v
+
+
+def _row_settings(row: "pd.Series") -> dict:
+    """One Log row (minus the identity columns) -> a dict of its non-blank
+    values, in column order."""
+    out: dict = {}
+    for k, v in row.items():
+        if v is None:
+            continue
+        if isinstance(v, float) and pd.isna(v):
+            continue
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                continue
+        out[k] = _native(v)
+    return out
+
+
+def load_log_entries(source) -> pd.DataFrame:
+    """Every **non-alarm** Log row, classified as a *mode* or a plain
+    *event*, each carrying a settings snapshot.
+
+    A row is a **mode** entry when its text mentions "mode" (case-insensitive)
+    — e.g. ``"Change A/C-VC Mode Setting"``, ``"Start NIV A/C-PC Mode"``,
+    ``"Standby Mode Activated"``, ``"Diagnostic mode active"`` — anything
+    else non-alarm is an **event** (``"Maintenance Settings Updated"``,
+    ``"Add New Patient"``, …).
+
+    Every Log row carries the device's full state alongside its own text: the
+    active ``Mode``, every "set" parameter (``PIP``, ``RR``, ``PEEP``,
+    ``FIO2``, ``VT``, …), the alarm-limit columns, and the simultaneous
+    cyclic readings (``Cyc. *``) — whichever of those a given export has.
+    ``Settings`` is a dict of every column **other than** the identity
+    columns (``Id``/``Date``/``Alarm``/``Status``) that's non-blank on that
+    row — not a hard-coded column list, so a different device/firmware's
+    column set still works.
+
+    Returns ``DataFrame[DateTime, Text, Kind, Settings]`` sorted by time
+    (``Kind`` is ``"mode"``/``"event"``); an empty (but correctly-typed)
+    frame when *source* is falsy or unreadable.
+    """
+    empty = pd.DataFrame({
+        "DateTime": pd.to_datetime([]), "Text": pd.Series([], dtype="object"),
+        "Kind": pd.Series([], dtype="object"), "Settings": pd.Series([], dtype="object"),
+    })
+    if source is None:
+        return empty
+    df = read_ventilator_csv(source, "Alarm")
+    if "Alarm" not in df.columns or "Date" not in df.columns:
+        return empty
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df = df.dropna(subset=["DateTime"])
+    df = df[~df["Alarm"].isin(ALARM_COLORS)]
+    text = df["Alarm"].astype(str).str.strip()
+    df = df[text != ""]
+    if df.empty:
+        return empty
+    text = df["Alarm"].astype(str).str.strip()
+    kind = text.str.contains(_MODE_RE).map({True: "mode", False: "event"})
+    cols = [c for c in df.columns if c.strip().lower() not in _LOG_META_COLS and c != "DateTime"]
+    settings = df[cols].apply(_row_settings, axis=1) if cols else pd.Series([{}] * len(df), index=df.index)
+    out = pd.DataFrame({"DateTime": df["DateTime"], "Text": text, "Kind": kind, "Settings": settings})
+    return out.sort_values("DateTime", kind="stable").reset_index(drop=True)
+
+
 def load_alarm_limits(source) -> List[Tuple["pd.Timestamp", Dict[str, list]]]:
     """Alarm-limit snapshots from the Log CSV's ``"<Var> Min"``/``"<Var> Max"``
     columns (e.g. ``"PIP Max"``, ``"PEEP Min"``, ``"PEEP Max"``, ``"RR Min"``,

@@ -240,6 +240,16 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .varbar label { font-size:13px; display:inline-flex; align-items:center; gap:4px;
     background:#f4f6f9; border:1px solid #e3e8ee; border-radius:20px; padding:3px 10px; cursor:pointer; }
   .varbar label:hover { border-color:#0a6ebd; }
+  .center-ctl { margin-left:auto; font-size:12px; color:#5b6b7b; display:inline-flex; align-items:center; gap:4px; }
+  .center-ctl select { font:inherit; padding:3px 6px; border-radius:6px; border:1px solid #e3e8ee; }
+  .viewset { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    background:#fff; border:1px solid #e3e8ee; border-radius:10px; padding:8px 14px; margin:8px 20px 0; }
+  .viewset .lbl { font-size:12px; color:#5b6b7b; font-weight:600; margin-right:2px; }
+  .viewset input, .viewset select { font:inherit; padding:5px 8px; border:1px solid #e3e8ee; border-radius:8px; }
+  .viewset input { width:170px; }
+  .viewset button { font:inherit; padding:5px 11px; border:1px solid #cfd8e3; border-radius:8px;
+    background:#f7f9fc; color:#0a6ebd; cursor:pointer; }
+  .viewset button:hover { background:#eaf4fc; }
   .overview { background:#fff; border:1px solid #e3e8ee; border-radius:10px; padding:8px 12px 4px; margin:12px 20px 0; }
   .overview .ov-h { font-size:12px; color:#5b6b7b; margin:0 0 4px; }
   svg.ov { width:100%; height:auto; display:block; touch-action:none; }
@@ -276,6 +286,27 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .chip.mode { background:#f3eefc; border-color:#dccdf5; color:#452a75; }
   .chip.mode b { color:#6f42c1; }
   .chip.mode.sel { background:#6f42c1; border-color:#6f42c1; color:#fff; }
+  .chip-info { font:inherit; font-size:10.5px; margin-left:5px; padding:0 5px; border-radius:8px;
+    border:1px solid currentColor; background:rgba(255,255,255,.6); color:inherit; cursor:pointer; line-height:1.5; }
+  .chip-info:hover { background:#fff; }
+  .chip-more { font:inherit; font-size:11.5px; margin-top:4px; padding:3px 10px; border-radius:12px;
+    border:1px solid #cfd8e3; background:#f7f9fc; color:#0a6ebd; cursor:pointer; }
+  .chip-more:hover { background:#eaf4fc; }
+  /* click-through detail popup for a mode/event chip's full settings snapshot */
+  .dm-overlay { position:fixed; inset:0; background:rgba(20,30,45,.45); z-index:200; padding:20px; }
+  .dm-overlay:not([hidden]) { display:flex; align-items:center; justify-content:center; }
+  .dm-box { position:relative; background:#fff; border-radius:12px; max-width:560px; width:100%;
+    max-height:82vh; overflow:auto; padding:20px 22px; box-shadow:0 10px 40px rgba(0,0,0,.3); }
+  .dm-close { position:absolute; top:8px; right:10px; border:0; background:none; font-size:22px;
+    line-height:1; color:#5b6b7b; cursor:pointer; padding:4px 8px; }
+  .dm-close:hover { color:#1d2733; }
+  .dm-h { font-size:14px; margin-bottom:10px; line-height:1.5; }
+  .dm-sec { font-size:12px; font-weight:700; color:#0a6ebd; margin:14px 0 4px; }
+  .dm-row { display:flex; justify-content:space-between; gap:10px; font-size:12.5px; padding:2px 0; }
+  table.dm-t { border-collapse:collapse; width:100%; font-size:12px; }
+  table.dm-t td { border-bottom:1px solid #eef2f6; padding:3px 6px; }
+  table.dm-t td.k { color:#5b6b7b; width:55%; }
+  table.dm-t td.v { font-weight:600; text-align:right; }
   /* per-window statistics */
   .statbox { margin-top:8px; border-top:1px solid #eef2f6; padding-top:6px; }
   .statbox summary { cursor:pointer; font-size:12px; font-weight:600; color:#0a6ebd; }
@@ -308,6 +339,22 @@ __NOTES__
   <span class="lbl">Y axis:</span>
   __VAROPTS__
   <span class="focus-note" id="focus-note" hidden></span>
+  <span class="center-ctl" title="Where each plot's Y range is centred, with a dotted line at zero when it falls in range">
+    Center: <select id="center-mode" onchange="setCenterMode(this.value)">
+      <option value="avg">Average</option>
+      <option value="median">Median</option>
+    </select>
+  </span>
+</div>
+
+<div class="viewset">
+  <span class="lbl">View settings:</span>
+  <input type="text" id="vs-name" placeholder="preset name, e.g. 'PIP overview'">
+  <button type="button" id="vs-save" title="Save the current Y-axis variables, centering, and overview trend variable">💾 Save</button>
+  <select id="vs-list"><option value="">— saved presets —</option></select>
+  <button type="button" id="vs-apply">Apply</button>
+  <button type="button" id="vs-delete" title="Delete the selected preset">🗑</button>
+  <span class="muted" id="vs-note" style="font-size:11px"></span>
 </div>
 
 <div class="controls">
@@ -351,7 +398,7 @@ __NOTES__
   </label>
   <div class="span" id="span-lbl">—</div>
 </div>
-<div style="font-size:11.5px;color:#5b6b7b;margin:4px 20px 0">Tip: use <b>←</b> / <b>→</b> to step the cursor through the data — hold to move faster.</div>
+<div style="font-size:11.5px;color:#5b6b7b;margin:4px 20px 0">Tip: use <b>←</b> / <b>→</b> to step the cursor through the data, or <b>Shift+←</b> / <b>Shift+→</b> to slide the whole window — hold either to move faster.</div>
 
 <div class="overview">
   <div class="ov-h" id="ov-h">Overview — set a range to zoom, then drag the window inside it</div>
@@ -362,6 +409,12 @@ __NOTES__
 </div>
 
 <div class="charts" id="charts"></div>
+<div id="detail-modal" class="dm-overlay" hidden onclick="if(event.target===this) closeDetailModal();">
+  <div class="dm-box">
+    <button type="button" class="dm-close" onclick="closeDetailModal()" title="Close (Esc)">&times;</button>
+    <div id="dm-body"></div>
+  </div>
+</div>
 <script id="data" type="application/json">/*__DATA__*/</script>
 <script>
 const CHAT_HREF = "__CHATHREF__";
@@ -373,10 +426,14 @@ const ALLVARS = DATA.vars, UNITS = DATA.units;
 const COL = {}; ALLVARS.forEach((v,i)=>{ COL[v]=i+1; });
 let VARS = (DATA.defaultVars && DATA.defaultVars.length ? DATA.defaultVars : ALLVARS).slice();
 let OVVAR = (DATA.defaultVars && DATA.defaultVars[0]) || ALLVARS[0];   // overview trend variable
+let CENTER_MODE = 'avg';   // each plot panel's Y range is centred on the mean ('avg') or 'median'
+function median(arr){ if(!arr.length) return 0; const s=arr.slice().sort((a,b)=>a-b); const m=s.length>>1;
+  return s.length%2 ? s[m] : (s[m-1]+s[m])/2; }
+function setCenterMode(m){ CENTER_MODE = (m==='median') ? 'median' : 'avg'; renderDetail(); }
 const MODE_COLOR = '#6f42c1', EVENT_COLOR = '#0aa3a3';                 // modes / events
 const SEP_COLOR = '#d98c00';   // cyclic-data-begins separator (before/after alarm log)
 const HOUR = 3600000;
-function modeAt(t){ let m=null; for(const md of DATA.modes){ if(md[0]<=t) m=md[1]; else break; } return m; }
+function modeAt(t){ for(const m of DATA.modes){ if(t>=m[0] && t<=m[1]) return m[2]; } return null; }
 // alarm-limit settings active at time t (the most recent "Alarm Limits Change"
 // snapshot at or before t) — {var: [min_or_null, max_or_null], ...} or null.
 function limitsAt(t){ let L=null; for(const s of DATA.limits){ if(s[0]<=t) L=s[1]; else break; } return L; }
@@ -558,7 +615,14 @@ function buildOverview(){
       const col=DATA.alarmColors[a[2]]||'#888';
       p.push(`<rect x="${x0.toFixed(1)}" y="${ly}" width="${Math.max(1.3,x1-x0).toFixed(1)}" height="${OV_LANE}" fill="${col}"/>`); }
     ly+=OV_LANE; }
-  if(laneMo) lane(DATA.modes, 'mode', MODE_COLOR, 'modes');
+  if(laneMo){   // modes as bars (one active mode at a time), coloured by mode name
+    const yy=ly+OV_LANE/2;
+    p.push(`<text x="${OV_L-5}" y="${yy+3}" text-anchor="end" font-size="8" fill="#5b6b7b">modes</text>`);
+    for(const m of DATA.modes){ if(m[1]<REGION.r0 || m[0]>REGION.r1) continue;
+      const x0=ovX(Math.max(m[0],REGION.r0)), x1=ovX(Math.min(m[1],REGION.r1));
+      const col=DATA.modeColors[m[2]]||MODE_COLOR;
+      p.push(`<rect x="${x0.toFixed(1)}" y="${ly}" width="${Math.max(1.3,x1-x0).toFixed(1)}" height="${OV_LANE}" fill="${col}"/>`); }
+    ly+=OV_LANE; }
   if(laneEv) lane(DATA.events, 'event', EVENT_COLOR, 'events');
   if(laneBu) lane(DATA.bursts, 'burst', '#c0392b', 'photos');
   const axisY = ly + 14;
@@ -682,6 +746,66 @@ document.getElementById('q-width-n').addEventListener('keydown', e=>{ if(e.key==
 document.getElementById('al-prev').addEventListener('click', ()=>gotoAlarm(-1));
 document.getElementById('al-next').addEventListener('click', ()=>gotoAlarm(1));
 
+// ============================ saved view-setting presets ============================
+// Fully offline/self-contained pages have no backend, so presets live in this
+// browser's localStorage (per-browser, not shared) — saves the *display*
+// preferences (Y-axis variables, centering, overview trend variable), not the
+// absolute time range, which is data-specific per report.
+const VS_KEY = 'cyclicViewSettings';
+function lsGet(k){ try{ return localStorage.getItem(k); } catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; } catch(e){ return false; } }
+function loadViewSettings(){ try{ return JSON.parse(lsGet(VS_KEY)||'[]'); } catch(e){ return []; } }
+function vsNote(msg){ const n=document.getElementById('vs-note'); if(n) n.textContent=msg; }
+function refreshViewSettingsList(){
+  const sel=document.getElementById('vs-list'); if(!sel) return;
+  const cur=sel.value, list=loadViewSettings();
+  sel.innerHTML = '<option value="">— saved presets —</option>'
+    + list.map(p=>`<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
+  if(list.some(p=>p.name===cur)) sel.value=cur;
+}
+function applyViewSettingsObj(s){
+  if(!s) return;
+  if(s.vars && s.vars.length){
+    const present = s.vars.filter(v=>ALLVARS.includes(v));
+    if(present.length){
+      VARS = present;
+      document.querySelectorAll('.varbar input[type=checkbox]').forEach(b=>{ b.checked = VARS.includes(b.value); });
+    }
+  }
+  if(s.centerMode){ CENTER_MODE = s.centerMode==='median' ? 'median' : 'avg';
+    const sel=document.getElementById('center-mode'); if(sel) sel.value=CENTER_MODE; }
+  if(s.ovVar && ALLVARS.includes(s.ovVar)){ OVVAR=s.ovVar;
+    const sel=document.getElementById('ov-var'); if(sel) sel.value=OVVAR; }
+  if(FOCUS && !VARS.includes(FOCUS)){ FOCUS=null; updateFocusNote(); }
+  buildOverview(); renderDetail();
+}
+document.getElementById('vs-save').addEventListener('click', ()=>{
+  const name=(document.getElementById('vs-name').value||'').trim();
+  if(!name){ vsNote('enter a name first'); return; }
+  const list=loadViewSettings();
+  const s={name, vars:VARS.slice(), centerMode:CENTER_MODE, ovVar:OVVAR};
+  const i=list.findIndex(p=>p.name===name);
+  if(i>=0) list[i]=s; else list.push(s);
+  if(!lsSet(VS_KEY, JSON.stringify(list))){
+    vsNote("couldn't save — this browser blocks local storage for files opened this way");
+    return;
+  }
+  refreshViewSettingsList();
+  document.getElementById('vs-list').value=name;
+  vsNote('saved'); setTimeout(()=>{ if(document.getElementById('vs-note').textContent==='saved') vsNote(''); }, 2000);
+});
+document.getElementById('vs-apply').addEventListener('click', ()=>{
+  const name=document.getElementById('vs-list').value; if(!name) return;
+  const s=loadViewSettings().find(p=>p.name===name);
+  if(s){ applyViewSettingsObj(s); vsNote('applied "'+name+'"'); }
+});
+document.getElementById('vs-delete').addEventListener('click', ()=>{
+  const name=document.getElementById('vs-list').value; if(!name) return;
+  lsSet(VS_KEY, JSON.stringify(loadViewSettings().filter(p=>p.name!==name)));
+  refreshViewSettingsList(); vsNote('deleted');
+});
+refreshViewSettingsList();
+
 // ---- jump the cursor to an exact date & time ----
 function gotoTime(t){
   if(t==null || isNaN(t)) return;
@@ -724,16 +848,33 @@ function arrowStep(dir){
   }
   lockAt(nt, true, true);          // exact: step sample-by-sample, no alarm magnet
 }
+// Shift+←/→ slides the whole window (independent of the cursor), instead of
+// stepping through samples — for quickly scanning across the log. Same
+// acceleration-while-held pattern as the plain-arrow cursor stepper.
+const PANHOLD = { hold:0, dir:0 };
+function panWindow(dir){
+  const w = SEL.t1-SEL.t0;
+  const step = PANHOLD.hold<4 ? 0.15 : PANHOLD.hold<12 ? 0.4 : 0.8;   // fraction of window width
+  let a = SEL.t0 + dir*step*w, b = a+w;
+  a = Math.max(REGION.r0, Math.min(a, REGION.r1-w));
+  b = a+w;
+  setSel(a, b);
+}
 document.addEventListener('keydown', e=>{
   const tag=(e.target.tagName||''); if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA') return;
   if(e.key==='ArrowRight' || e.key==='ArrowLeft'){
     e.preventDefault();
     const dir = e.key==='ArrowRight' ? 1 : -1;
+    if(e.shiftKey){
+      if(e.repeat && dir===PANHOLD.dir) PANHOLD.hold++; else { PANHOLD.hold=0; PANHOLD.dir=dir; }
+      panWindow(dir);
+      return;
+    }
     if(e.repeat && dir===ARROW.dir) ARROW.hold++; else { ARROW.hold=0; ARROW.dir=dir; }
     arrowStep(dir);
   }
 });
-document.addEventListener('keyup', e=>{ if(e.key==='ArrowRight'||e.key==='ArrowLeft') ARROW.hold=0; });
+document.addEventListener('keyup', e=>{ if(e.key==='ArrowRight'||e.key==='ArrowLeft'){ ARROW.hold=0; PANHOLD.hold=0; } });
 
 // ============================ DETAIL chart ============================
 function sliceWindow(t0, t1){
@@ -741,7 +882,7 @@ function sliceWindow(t0, t1){
   for(let i=lo;i<DATA.samples.length && DATA.samples[i][0]<=t1;i++) out.push(DATA.samples[i]);
   const al=DATA.alarms.filter(a=>a[1]>=t0 && a[0]<=t1);   // interval overlaps window
   const bu=DATA.bursts.filter(b=>b[0]>=t0 && b[0]<=t1);
-  const mo=DATA.modes.filter(m=>m[0]>=t0 && m[0]<=t1);
+  const mo=DATA.modes.filter(m=>m[1]>=t0 && m[0]<=t1);   // interval overlaps window
   const ev=DATA.events.filter(e=>e[0]>=t0 && e[0]<=t1);
   // gi0 = absolute index of the window's first sample in the whole log; window
   // samples are a contiguous run, so sample k's global index is gi0+k. Used to
@@ -779,7 +920,12 @@ function buildChart(win){
   const svg = document.getElementById('chart-d');
   const alarmTypes = [...new Set(win.alarms.map(a=>a[2]))]
         .sort((a,b)=>Object.keys(DATA.alarmColors).indexOf(a)-Object.keys(DATA.alarmColors).indexOf(b));
-  const laneH = alarmTypes.length ? alarmTypes.length*LANE_ROW + 8 : 0;
+  // modes are mutually exclusive over time (only one active at once) so they
+  // fit on a single swim-lane row, like the alarms lane but one row instead
+  // of one-per-type — sits above the alarm lane(s).
+  const modeLaneH = win.modes.length ? LANE_ROW + 4 : 0;
+  const alarmLaneH = alarmTypes.length ? alarmTypes.length*LANE_ROW + 8 : 0;
+  const laneH = modeLaneH + alarmLaneH;
   const nV = VARS.length;
   const PH = panelHeights();                    // focused panel tall, the rest shrunk
   const N = win.samples.length, useIdx = N>0;   // index axis only when there's cyclic data
@@ -827,10 +973,18 @@ function buildChart(win){
     if(t1 <= DATA.sampleMin) return [[beforeXOf(Math.max(t0,win.t0)), beforeXOf(Math.min(t1,DATA.sampleMin))]];
     return [[beforeXOf(Math.max(t0,win.t0)), beforeR], [plotL, xOf(Math.min(t1,win.t1))]];
   }
-  const ranges = VARS.map(v=>{ const c=COL[v]; let mn=Infinity, mx=-Infinity;
-    for(const s of win.samples){ const y=s[c]; if(y==null) continue; if(y<mn)mn=y; if(y>mx)mx=y; }
+  // Y range per panel: centred on the window's mean (or median) value for that
+  // variable, not just its raw min/max — a symmetric half-span around the
+  // centre covering both extremes, so the centre line sits mid-panel.
+  const ranges = VARS.map(v=>{ const c=COL[v]; let mn=Infinity, mx=-Infinity, sum=0, n=0; const vals=[];
+    for(const s of win.samples){ const y=s[c]; if(y==null) continue;
+      if(y<mn)mn=y; if(y>mx)mx=y; sum+=y; n++; vals.push(y); }
     if(mn===Infinity){ mn=0; mx=1; } if(mn===mx){ mn-=1; mx+=1; }
-    const pad=(mx-mn)*0.08; return [mn-pad, mx+pad]; });
+    const pad=(mx-mn)*0.08;
+    const center = n ? (CENTER_MODE==='median' ? median(vals) : sum/n) : (mn+mx)/2;
+    const half = Math.max(center-mn, mx-center) + pad;
+    return [center-half, center+half];
+  });
   const tops = []; { let y = TOP + idxTop + laneH;
     for(let k=0;k<nV;k++){ tops.push(y); y += PH[k] + PANEL_GAP; } }
   const panelTop = k => tops[k];
@@ -847,7 +1001,7 @@ function buildChart(win){
     parts.push(`<text x="${(plotL0+beforeR)/2}" y="${panelsBottom+14}" text-anchor="middle" font-size="8" `
       + `font-style="italic" fill="#a05a00">history</text>`);
   }
-  if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = TOP + idxTop + r*LANE_ROW + LANE_ROW/2;
+  if(alarmTypes.length){ alarmTypes.forEach((typ,r)=>{ const y = mTop + modeLaneH + r*LANE_ROW + LANE_ROW/2;
     const col = DATA.alarmColors[typ] || '#888';
     parts.push(`<text x="${plotL0-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(typ)}</text>`);
     // one bar per active interval (Activated→Deactivated) of this alarm type —
@@ -862,6 +1016,11 @@ function buildChart(win){
     gridVals(mn, mx, PH[k]).forEach(val=>{ const y=yOf(k,val);
       parts.push(`<line x1="${plotL}" y1="${y}" x2="${plotR}" y2="${y}" stroke="#eef2f6"/>`);
       parts.push(`<text x="${plotL0-5}" y="${y+3}" text-anchor="end" font-size="8" fill="#5b6b7b">${val.toFixed(PH[k]>=150?1:0)}</text>`); });
+    if(mn<0 && mx>0){   // zero line, only when zero actually falls inside this panel's range
+      const y0=yOf(k,0);
+      parts.push(`<line x1="${plotL}" y1="${y0}" x2="${plotR}" y2="${y0}" stroke="#8a97a6" stroke-width="1" stroke-dasharray="2 3"/>`);
+      parts.push(`<text x="${plotL0-5}" y="${y0+3}" text-anchor="end" font-size="7.5" fill="#8a97a6">0</text>`);
+    }
     parts.push(`<text x="${plotL+4}" y="${top+11}" font-size="10" font-weight="bold" fill="#1d2733">${v} (${UNITS[v]||''})</text>`);
     // double-click target: focuses this panel (and shrinks the others)
     parts.push(`<rect class="panel-hit" data-v="${esc(v)}" x="${plotL}" y="${top}" width="${plotR-plotL}"`
@@ -913,16 +1072,21 @@ function buildChart(win){
     parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 3"/>`);
     parts.push(`<text x="${x}" y="${mTop-1}" text-anchor="middle" font-size="8" font-weight="bold" fill="#c0392b">${fmtHM(b[0])}</text>`);
     parts.push(`<rect class="burst-hit" x="${x-5}" y="${mTop}" width="10" height="${panelsBottom-mTop}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTime(b[0])} — click to see in chat</title></rect>`); }
-  // mode changes: purple dashed line at each change, with a label. Every mode
-  // gets a label — when two would collide (within 46px) they alternate onto a
-  // second row instead of being skipped, so a mode right after a crowded one
-  // (e.g. Standby) is never left unlabeled/invisible.
-  let lastMX=-1e9, modeRow=0;
-  for(const m of win.modes){ const x=xOfAny(m[0]);
-    parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="${MODE_COLOR}" stroke-width="1" stroke-dasharray="2 2"><title>${esc(m[1])} at ${fmtTime(m[0])}</title></line>`);
-    modeRow = (x-lastMX>46) ? 0 : 1-modeRow;
-    parts.push(`<text x="${x+2}" y="${panelsBottom-2-modeRow*10}" font-size="8" fill="${MODE_COLOR}" font-weight="bold">${esc(m[1])}</text>`);
-    lastMX=x; }
+  // modes: a single swim-lane of coloured bars (one per active mode
+  // interval), the same technique as the alarm lane just below it — replaces
+  // the old dashed-line-plus-label rendering, which collided/overlapped
+  // whenever mode changes were dense.
+  if(win.modes.length){
+    const y0 = mTop + 2, hgt = Math.max(4, modeLaneH - 4);
+    parts.push(`<text x="${plotL0-6}" y="${mTop+modeLaneH/2+3}" text-anchor="end" font-size="8" fill="${MODE_COLOR}">mode</text>`);
+    for(const m of win.modes){
+      const col = DATA.modeColors[m[2]] || MODE_COLOR;
+      for(const [bx0,bx1] of barSegments(m[0], m[1])){
+        const x0=Math.max(plotL0,bx0), x1=Math.min(plotR,bx1);
+        parts.push(`<rect x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${Math.max(1.5,x1-x0).toFixed(1)}" height="${hgt.toFixed(1)}" fill="${col}" fill-opacity="0.85"><title>${esc(m[2])} · ${fmtDateTime(m[0])} → ${fmtDateTime(m[1])} (${fmtDur(m[1]-m[0])})</title></rect>`);
+      }
+    }
+  }
   // settings/data-change events: teal ticks along the top, plus a tick below the
   // time/date axis that lines up with the titles listed below the chart
   for(const e of win.events){ const x=xOfAny(e[0]);
@@ -942,6 +1106,7 @@ function buildChart(win){
   rows += `<tr><td class="k">Mode</td><td class="v" id="ro-d-mode">—</td></tr>`;
   rows += `<tr><td class="k">Alarms</td><td class="v al" id="ro-d-al">—</td></tr>`;
   rows += `<tr><td class="k">Events</td><td class="v al" id="ro-d-ev">—</td></tr>`;
+  rows += `<tr><td class="k" title="The device's set values as of the most recent log entry at or before this moment">Set values</td><td class="v" id="ro-d-set">—</td></tr>`;
   if(DATA.limitVars && DATA.limitVars.length){
     rows += `<tr><td class="k" colspan="2" style="padding-top:6px;border-top:1px solid #dbe3ec">`
       + `<b>Alarm limits</b></td></tr>`;
@@ -980,10 +1145,15 @@ function varAtEvent(e){
   return null; }
 
 // ============ event / mode titles under the time axis (selectable + clickable) ============
-function chipHTML(t, txt, cls){   // date shown beside the time
+// A "ⓘ" button on an event/mode chip opens the full-detail popup (settings
+// snapshot from the Log row + alarms active then) — stopPropagation so it
+// doesn't also trigger the chip's own click (jump cursor here).
+function chipHTML(t, txt, cls, idx){   // date shown beside the time; idx = win.events[idx]
+  const info = `<button type="button" class="chip-info" title="Show full details"`
+    + ` onclick="event.stopPropagation(); showDetailModal('event', ${idx});">ⓘ</button>`;
   return `<span class="chip ${cls}" data-t="${t}" onclick="pickEvent(this)"`
     + ` title="${esc(txt)} at ${fmtDateTime(t)} — click to put the cursor here">`
-    + `<b>${fmtDate(t)} ${fmtTime(t)}</b>${esc(txt)}</span>`;
+    + `<b>${fmtDate(t)} ${fmtTime(t)}</b>${esc(txt)}${info}</span>`;
 }
 function alarmChipHTML(a){       // a = [start, end, type]; shows the full active period
   const col=DATA.alarmColors[a[2]]||'#888';
@@ -995,24 +1165,96 @@ function alarmChipHTML(a){       // a = [start, end, type]; shows the full activ
     + `<b style="color:${col}">${fmtDate(a[0])} ${fmtTime(a[0])} → ${endStr}</b>`
     + ` <span style="color:#5b6b7b">${fmtDur(a[1]-a[0])}</span> ${esc(a[2])}</span>`;
 }
+function modeChipHTML(m, idx){   // m = [start, end, label, settings]; win.modes[idx]
+  const col=DATA.modeColors[m[2]]||MODE_COLOR;
+  const sameDay = fmtDate(m[0])===fmtDate(m[1]);
+  const endStr = sameDay ? fmtTime(m[1]) : (fmtDate(m[1])+' '+fmtTime(m[1]));
+  const info = `<button type="button" class="chip-info" title="Show full details"`
+    + ` onclick="event.stopPropagation(); showDetailModal('mode', ${idx});">ⓘ</button>`;
+  return `<span class="chip mode" data-t="${m[0]}" onclick="pickEvent(this)"`
+    + ` style="border-color:${col};color:${col}"`
+    + ` title="${esc(m[2])} · ${fmtDateTime(m[0])} → ${fmtDateTime(m[1])} (${fmtDur(m[1]-m[0])}) — click to jump">`
+    + `<b style="color:${col}">${fmtDate(m[0])} ${fmtTime(m[0])} → ${endStr}</b>`
+    + ` <span style="color:#5b6b7b">${fmtDur(m[1]-m[0])}</span> ${esc(m[2])}${info}</span>`;
+}
+// caps a chip group to CHIP_CAP with a "Show all N ▾" toggle, so a window
+// with hundreds of alarms/events doesn't dump a huge wall of chips by default
+// but every one of them is still reachable.
+const CHIP_CAP = 20;
+function chipsBlock(htmlArr, groupId){
+  if(!htmlArr.length) return '';
+  if(htmlArr.length <= CHIP_CAP) return `<div class="chips">${htmlArr.join('')}</div>`;
+  const shown = htmlArr.slice(0, CHIP_CAP).join('');
+  const rest = htmlArr.slice(CHIP_CAP).join('');
+  return `<div class="chips" id="chips-${groupId}-a">${shown}</div>`
+    + `<div class="chips" id="chips-${groupId}-b" hidden>${rest}</div>`
+    + `<button type="button" class="chip-more" id="more-${groupId}" data-n="${htmlArr.length}"`
+    + ` onclick="toggleChips('${groupId}')">Show all ${htmlArr.length} ▾</button>`;
+}
+function toggleChips(groupId){
+  const b=document.getElementById('chips-'+groupId+'-b'), btn=document.getElementById('more-'+groupId);
+  if(!b || !btn) return;
+  const willShow = b.hidden;
+  b.hidden = !willShow;
+  btn.textContent = willShow ? 'Show fewer ▲' : ('Show all '+btn.dataset.n+' ▾');
+}
 function buildLedger(win){
   const host=document.getElementById('ledger-d'); if(!host) return;
   let h = `<div class="ledger-h">Alarms in this window — <b>${win.alarms.length}</b>`
     + ` · click one to jump to it</div>`;
-  h += `<div class="chips">` + (win.alarms.length
-      ? win.alarms.map(a=>alarmChipHTML(a)).join('')
-      : `<span class="muted">no alarms in this window</span>`) + `</div>`;
+  h += win.alarms.length ? chipsBlock(win.alarms.map(a=>alarmChipHTML(a)), 'al')
+                         : `<div class="chips"><span class="muted">no alarms in this window</span></div>`;
   h += `<div class="ledger-h" style="margin-top:7px">Events — <b>${win.events.length}</b>`
-    + ` · click a title to put the cursor at that moment · the text is selectable</div>`;
-  h += `<div class="chips">` + (win.events.length
-      ? win.events.map(e=>chipHTML(e[0], e[1], 'ev')).join('')
-      : `<span class="muted">no logged events in this window</span>`) + `</div>`;
+    + ` · click a title to jump the cursor there · ⓘ for full settings · text is selectable</div>`;
+  h += win.events.length ? chipsBlock(win.events.map((e,i)=>chipHTML(e[0], e[1], 'ev', i)), 'ev')
+                         : `<div class="chips"><span class="muted">no logged events in this window</span></div>`;
   if(win.modes.length){
-    h += `<div class="ledger-h" style="margin-top:7px">Mode changes — <b>${win.modes.length}</b></div>`
-      + `<div class="chips">` + win.modes.map(m=>chipHTML(m[0], m[1], 'mode')).join('') + `</div>`;
+    h += `<div class="ledger-h" style="margin-top:7px">Mode changes — <b>${win.modes.length}</b> · ⓘ for full settings</div>`;
+    h += chipsBlock(win.modes.map((m,i)=>modeChipHTML(m, i)), 'mo');
   }
   host.innerHTML = h;
 }
+// ============ mode/event detail popup (settings, alarms, current behaviour) ============
+function fmtSettingsRows(settings){
+  const keys = settings ? Object.keys(settings) : [];
+  if(!keys.length) return `<tr><td colspan="2" class="muted" style="border:0">no settings snapshot recorded for this entry</td></tr>`;
+  return keys.map(k=>`<tr><td class="k">${esc(k)}</td><td class="v">${esc(settings[k])}</td></tr>`).join('');
+}
+function showDetailModal(kind, idx){    // idx into CTRL.win.modes / .events (chip click)
+  const win = CTRL.win; if(!win) return;
+  const entry = kind==='mode' ? win.modes[idx] : win.events[idx];
+  if(entry) renderDetailModal(kind, entry);
+}
+function renderDetailModal(kind, entry){    // entry = the raw [.,.,...] array itself
+  const isMode = kind==='mode';
+  const t0 = entry[0];
+  const t1 = isMode ? entry[1] : null;
+  const label = isMode ? entry[2] : entry[1];
+  const settings = isMode ? entry[3] : entry[2];
+  // alarms active at this instant (or overlapping this mode's whole span)
+  const activeAlarms = DATA.alarms.filter(a => t0<=a[1] && (t1==null?t0:t1)>=a[0]);
+  let body = `<div class="dm-h"><b>${esc(label)}</b><br>`
+    + (isMode ? `${fmtDateTime(t0)} → ${fmtDateTime(t1)} <span class="muted">(${fmtDur(t1-t0)})</span>`
+              : fmtDateTime(t0))
+    + `</div>`;
+  if(!isMode){
+    const cm = modeAt(t0);
+    body += `<div class="dm-row"><span class="k">Ventilation mode at this time</span>`
+      + `<span class="v">${esc(cm||'—')}</span></div>`;
+  }
+  body += `<div class="dm-sec">Settings / readings on this log entry</div>`
+    + `<table class="dm-t">${fmtSettingsRows(settings)}</table>`;
+  body += `<div class="dm-sec">Alarms active at this time (${activeAlarms.length})</div>`;
+  body += activeAlarms.length
+    ? `<table class="dm-t">` + activeAlarms.map(a=>`<tr><td class="k" `
+        + `style="color:${DATA.alarmColors[a[2]]||'#888'}">${esc(a[2])}</td>`
+        + `<td class="v">${fmtDateTime(a[0])} → ${fmtDateTime(a[1])}</td></tr>`).join('') + `</table>`
+    : `<p class="muted" style="font-size:12px;margin:4px 0">none</p>`;
+  document.getElementById('dm-body').innerHTML = body;
+  document.getElementById('detail-modal').hidden = false;
+}
+function closeDetailModal(){ const m=document.getElementById('detail-modal'); if(m) m.hidden = true; }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDetailModal(); });
 function pickEvent(el){
   const wasSel = el.classList.contains('sel');
   document.querySelectorAll('#ledger-d .chip.sel').forEach(c=>c.classList.remove('sel'));
@@ -1280,7 +1522,30 @@ function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
       ? list.map(x=>`<span style="color:${EVENT_COLOR}">${esc(x)}</span>`).join('<br>') : '—'; }
   if(DATA.limitVars && DATA.limitVars.length){ const L=limitsAt(anchor);
     DATA.limitVars.forEach((v,i)=>{ const cell=document.getElementById('ro-d-lim'+i);
-      if(cell) cell.textContent = fmtLimit(L && L[v]); }); } }
+      if(cell) cell.textContent = fmtLimit(L && L[v]); }); }
+  const sc=document.getElementById('ro-d-set');
+  if(sc){ const ls=nearestLogEntry(anchor);
+    sc.innerHTML = ls
+      ? `${esc(ls.label)} <span class="muted" style="font-weight:400">(${fmtTime(ls.t)})</span>`
+        + ` <button type="button" class="chip-info" onclick="showLogEntryModal(${anchor})">ⓘ</button>`
+      : '—'; } }
+// nearest non-alarm log entry (mode or event) at-or-before t that carries a
+// settings snapshot — "the set setting from the logs for the chosen point".
+// DATA.events / DATA.modes are both time-sorted ascending by their [0].
+function lastAtOrBefore(arr, t){
+  let lo=0, hi=arr.length; while(lo<hi){ const m=(lo+hi)>>1; if(arr[m][0]<=t) lo=m+1; else hi=m; }
+  return lo>0 ? arr[lo-1] : null;
+}
+function nearestLogEntry(t){
+  const e=lastAtOrBefore(DATA.events, t), m=lastAtOrBefore(DATA.modes, t);
+  const eT = e ? e[0] : -Infinity, mT = m ? m[0] : -Infinity;
+  if(eT<0 && mT<0) return null;
+  return mT>=eT ? {kind:'mode', t:m[0], label:m[2], settings:m[3], entry:m}
+               : {kind:'event', t:e[0], label:e[1], settings:e[2], entry:e};
+}
+function showLogEntryModal(t){
+  const ls=nearestLogEntry(t); if(ls) renderDetailModal(ls.kind, ls.entry);
+}
 function hideCursor(){ const cx=document.getElementById('cx-d'); if(cx) cx.setAttribute('visibility','hidden');
   VARS.forEach((v,k)=>{ const hg=document.getElementById('hg-d-'+k), dot=document.getElementById('dot-d-'+k);
     if(hg) hg.setAttribute('visibility','hidden'); if(dot) dot.setAttribute('visibility','hidden'); });
@@ -1289,6 +1554,7 @@ function hideCursor(){ const cx=document.getElementById('cx-d'); if(cx) cx.setAt
   const alc=document.getElementById('ro-d-al'); if(alc) alc.textContent='—';
   const mc=document.getElementById('ro-d-mode'); if(mc) mc.textContent='—';
   const evc=document.getElementById('ro-d-ev'); if(evc) evc.textContent='—';
+  const sc=document.getElementById('ro-d-set'); if(sc) sc.textContent='—';
   if(DATA.limitVars) DATA.limitVars.forEach((v,i)=>{ const cell=document.getElementById('ro-d-lim'+i);
     if(cell) cell.textContent='—'; }); }
 function lockAt(ts, noScroll, exact){ if(!CTRL.win) return; CTRL.locked=true;
