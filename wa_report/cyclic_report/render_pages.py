@@ -480,6 +480,14 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .vs-scope label, .vs-fields label { font-size:12px; color:#5b6b7b; display:inline-flex;
     align-items:center; gap:3px; cursor:pointer; white-space:nowrap; }
   .vs-fields { border-left:1px solid #e3e8ee; padding-left:10px; }
+  .vs-list-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    background:#fff; border:1px solid #e3e8ee; border-radius:10px; padding:8px 14px; margin:6px 20px 0; }
+  .vs-list-bar .lbl { font-size:12px; color:#5b6b7b; font-weight:600; }
+  .vs-list-bar select { font:inherit; padding:5px 8px; border:1px solid #e3e8ee; border-radius:8px;
+    min-width:200px; max-width:320px; }
+  .vs-list-bar button { font:inherit; font-size:11.5px; padding:5px 11px; border-radius:8px;
+    border:1px solid #cfd8e3; background:#f7f9fc; color:#0a6ebd; cursor:pointer; }
+  .vs-list-bar button:hover { background:#eaf4fc; }
   .overview { background:#fff; border:1px solid #e3e8ee; border-radius:10px; padding:8px 12px 4px; margin:12px 20px 0; }
   .overview .ov-h { font-size:12px; color:#5b6b7b; margin:0 0 4px; }
   svg.ov { width:100%; height:auto; display:block; touch-action:none; }
@@ -584,8 +592,8 @@ __NOTES__
   <span class="lbl">View:</span>
   <input type="text" id="vs-name" placeholder="optional label, e.g. 'PIP overview'">
   <span class="vs-scope">
-    <label title="Export every part of the current view"><input type="radio" name="vs-scope" value="all" id="vs-scope-all" checked> All</label>
-    <label title="Choose which parts of the current view to export"><input type="radio" name="vs-scope" value="sel" id="vs-scope-sel"> Selective</label>
+    <label title="Capture every part of the current view"><input type="radio" name="vs-scope" value="all" id="vs-scope-all" checked> All</label>
+    <label title="Choose which parts of the current view to capture"><input type="radio" name="vs-scope" value="sel" id="vs-scope-sel"> Selective</label>
   </span>
   <span class="vs-fields" id="vs-fields" hidden>
     <label><input type="checkbox" id="vs-f-vars" checked> Y-axis variables</label>
@@ -593,10 +601,17 @@ __NOTES__
     <label><input type="checkbox" id="vs-f-ovvar" checked> Overview trend</label>
     <label><input type="checkbox" id="vs-f-window" checked> Window/time range</label>
   </span>
-  <button type="button" id="vs-export" title="Download the current view as a file — no save step, this always exports what's on screen right now; pick 'Selective' to export only some parts of it">⬇ Export view</button>
-  <button type="button" id="vs-import" title="Load one previously-exported view file and jump straight to it — a selective export only changes the parts it carries, leaving the rest as-is">⬆ Import view</button>
+  <button type="button" id="vs-add" title="Add the current view to the list below, under the name typed above">+ Add to list</button>
+  <button type="button" id="vs-export" title="Download every view in the list below as one file — if the list is empty, exports just the current view; pick 'Selective' to only capture some parts">⬇ Export view(s)</button>
+  <button type="button" id="vs-import" title="Load a previously-exported view file — every view in it is added to the list below, and the last one is switched to right away">⬆ Import view(s)</button>
   <input type="file" id="vs-import-file" accept="application/json" hidden>
   <span class="muted" id="vs-note" style="font-size:11px"></span>
+</div>
+<div class="vs-list-bar" id="vs-list-bar" hidden>
+  <span class="lbl">Views:</span>
+  <select id="vs-select" title="Pick a view to switch to it right away"></select>
+  <button type="button" id="vs-remove" title="Remove the picked view from this list (already-exported files are unaffected)">✕ Remove</button>
+  <button type="button" id="vs-clear" title="Remove every view from this list">clear all</button>
 </div>
 
 <div class="controls">
@@ -1026,23 +1041,32 @@ document.getElementById('al-next').addEventListener('click', ()=>gotoAlarm(1));
 // A "view" (Y-axis variables, centering, overview trend variable, and the
 // window/time range you're looking at — the time range is *why* you'd want
 // this in the first place, not an afterthought) is a file, not a saved
-// setting. There's no "Save" step and nothing lives in browser storage:
-// Export always exports exactly what's on screen right now, one file at a
-// time; Import always applies exactly one file, immediately, rather than
-// merging into some stored collection you manage separately. That's a
-// deliberate simplification, not a missing feature — an earlier version
-// kept a named list in localStorage, but for a file opened straight off
-// disk (file://, the normal way this report is opened) that storage is
-// scoped to the file's *containing folder* by most browsers, so a "saved"
-// view from one report export was invisible from a different one — even in
-// the same browser on the same PC — which looked exactly like "it didn't
-// save". A file you export and re-import has no such ambiguity.
+// setting: nothing lives in browser storage, and VIEWS below is cleared on
+// reload, never persisted. An earlier version kept a named list in
+// localStorage, but for a file opened straight off disk (file://, the
+// normal way this report is opened) that storage is scoped to the file's
+// *containing folder* by most browsers, so a "saved" view from one report
+// export was invisible from a different one — even in the same browser on
+// the same PC — which looked exactly like "it didn't save". A file you
+// export and re-import has no such ambiguity.
 //
-// Export additionally has an All/Selective scope: All (default) bundles
+// VIEWS is ONE list serving both directions: "+ Add to list" captures the
+// current on-screen view into it (under the typed name); importing a file
+// adds every view the file carries into the SAME list, rather than a
+// separate one-off picker. The <select> (#vs-select) always shows every
+// view currently known — added or imported, indistinguishable — by name;
+// choosing one switches to it immediately. "Export view(s)" downloads the
+// whole list as one file (or, if it's empty, just the current view on the
+// spot, so a single quick export still needs only one click).
+//
+// Export additionally has an All/Selective scope: All (default) captures
 // every part of the view, Selective lets you tick just the parts you want
 // (e.g. only the time window, without forcing the recipient onto your
-// Y-axis choice). applyViewSettingsObj only touches the fields present in
-// the file, so a selective import naturally leaves every other part alone.
+// Y-axis choice) — this applies per-view, at the moment it's added (or,
+// for a listless quick export, at export time). applyViewSettingsObj only
+// touches the fields present in a given view, so a selective import
+// naturally leaves every other part alone.
+let VIEWS = [];
 function applyViewSettingsObj(s){
   if(!s) return;
   if(s.vars && s.vars.length){
@@ -1077,14 +1101,16 @@ document.querySelectorAll('input[name="vs-scope"]').forEach(r=>{
     document.getElementById('vs-fields').hidden = !sel;
   });
 });
-document.getElementById('vs-export').addEventListener('click', ()=>{
-  const name=(document.getElementById('vs-name').value||'').trim();
+// Builds one view object from the CURRENT on-screen state, honouring the
+// All/Selective scope + field checkboxes — shared by "+ Add to list" and
+// the listless quick-export path. Returns null (nothing to export) when
+// Selective has every field unticked. NOTE: each checkbox is looked up by
+// its own literal getElementById call (not a built-up 'vs-f-'+f string) —
+// a dynamically-built id/lookup here would silently break once this page
+// is namespaced into the merged single-file report (see _page_fragment's
+// docstring on why only literal id="…"/getElementById(…) text gets renamed).
+function buildViewObj(name){
   const all = document.querySelector('input[name="vs-scope"]:checked').value === 'all';
-  // NOTE: each checkbox is looked up by its own literal getElementById call
-  // (not a built-up 'vs-f-'+f string) — a dynamically-built id/lookup here
-  // would silently break once this page is namespaced into the merged
-  // single-file report (see _page_fragment's docstring on why only literal
-  // id="…"/getElementById(…) text gets renamed).
   const wantVars = all || document.getElementById('vs-f-vars').checked;
   const wantCenter = all || document.getElementById('vs-f-center').checked;
   const wantOvvar = all || document.getElementById('vs-f-ovvar').checked;
@@ -1094,22 +1120,79 @@ document.getElementById('vs-export').addEventListener('click', ()=>{
   if(wantCenter) s.centerMode = CENTER_MODE;
   if(wantOvvar) s.ovVar = OVVAR;
   if(wantWindow){ s.t0 = SEL.t0; s.t1 = SEL.t1; }
-  if(!all && s.vars===undefined && s.centerMode===undefined && s.ovVar===undefined && s.t0===undefined){
-    vsNote('pick at least one part to export'); return;
-  }
-  const blob=new Blob([JSON.stringify(s,null,2)], {type:'application/json'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url;
-  const slug=(name.replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'-')) || 'cyclic-view';
-  a.download=slug+'.json';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  if(!all && s.vars===undefined && s.centerMode===undefined && s.ovVar===undefined && s.t0===undefined) return null;
+  return s;
+}
+function viewSummary(s){
   const parts=[];
   if(s.vars) parts.push(`${s.vars.length} variable${s.vars.length===1?'':'s'}`);
   if(s.centerMode) parts.push('centering');
   if(s.ovVar) parts.push('overview trend');
   if(s.t0!=null) parts.push(`window ${fmtDateTime(s.t0)} → ${fmtDateTime(s.t1)}`);
-  vsNote(`exported — ${parts.join(', ')}`);
+  return parts.join(', ') || 'nothing';
+}
+// Re-fills the <select> from VIEWS (value = index, text = the view's own
+// name — falling back to "View N" only when none was given) and shows/hides
+// the whole bar. `selectIdx`, when given, is the option to leave selected
+// afterward (e.g. the one just added/imported) — otherwise the previous
+// selection index is kept if it's still valid.
+function renderViewsList(selectIdx){
+  const bar=document.getElementById('vs-list-bar'), sel=document.getElementById('vs-select');
+  if(!bar || !sel) return;
+  bar.hidden = !VIEWS.length;
+  const keep = selectIdx!=null ? selectIdx : Math.min(sel.selectedIndex, VIEWS.length-1);
+  sel.innerHTML = VIEWS.map((v,i)=>`<option value="${i}">${esc(v.name || ('View '+(i+1)))}</option>`).join('');
+  if(keep>=0) sel.selectedIndex = keep;
+}
+// Switches to whichever view is currently picked in the dropdown — shared
+// by the dropdown's own change handler and by importing straight into a
+// freshly-added view.
+function applySelectedView(){
+  const sel=document.getElementById('vs-select');
+  const i=sel ? sel.selectedIndex : -1;
+  const s=VIEWS[i]; if(!s) return;
+  applyViewSettingsObj(s);
+  document.getElementById('vs-name').value = s.name || '';
+  vsNote(`switched to "${esc(s.name||('View '+(i+1)))}" — ${viewSummary(s)}`);
+}
+document.getElementById('vs-select').addEventListener('change', applySelectedView);
+document.getElementById('vs-remove').addEventListener('click', ()=>{
+  const sel=document.getElementById('vs-select'); const i=sel.selectedIndex;
+  if(i<0 || !VIEWS[i]) return;
+  const name=VIEWS[i].name || ('View '+(i+1));
+  VIEWS.splice(i,1);
+  renderViewsList();
+  vsNote(`removed "${esc(name)}" from the list`);
+});
+document.getElementById('vs-clear').addEventListener('click', ()=>{
+  VIEWS=[]; renderViewsList(); vsNote('list cleared');
+});
+document.getElementById('vs-add').addEventListener('click', ()=>{
+  const name=(document.getElementById('vs-name').value||'').trim();
+  const s=buildViewObj(name);
+  if(!s){ vsNote('pick at least one part to add'); return; }
+  VIEWS.push(s);
+  renderViewsList(VIEWS.length-1);
+  vsNote(`added "${esc(name||('View '+VIEWS.length))}" to the list — ${viewSummary(s)}`);
+});
+document.getElementById('vs-export').addEventListener('click', ()=>{
+  // an empty list is a quick single-view export: capture the current view
+  // on the spot rather than making a "+ Add" click mandatory first.
+  let views = VIEWS.slice();
+  if(!views.length){
+    const name=(document.getElementById('vs-name').value||'').trim();
+    const s=buildViewObj(name);
+    if(!s){ vsNote('pick at least one part to export'); return; }
+    views=[s];
+  }
+  const blob=new Blob([JSON.stringify(views,null,2)], {type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url;
+  const firstName=(views[0].name||'').replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'-');
+  a.download=(firstName || (views.length>1 ? 'cyclic-views' : 'cyclic-view'))+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  vsNote(views.length===1 ? `exported — ${viewSummary(views[0])}` : `exported ${views.length} views`);
 });
 document.getElementById('vs-import').addEventListener('click', ()=>{
   document.getElementById('vs-import-file').click();
@@ -1119,16 +1202,17 @@ document.getElementById('vs-import-file').addEventListener('change', e=>{
   if(!file) return;
   const reader=new FileReader();
   reader.onload=()=>{
-    let s;
-    try{
-      s=JSON.parse(reader.result);
-      if(Array.isArray(s)) s=s[0];   // tolerate an old-style multi-preset export — take the first
-      if(!s || typeof s!=='object') throw 0;
-    } catch(err){ vsNote('could not read that file — is it a view exported from ⬇ Export view?'); return; }
-    applyViewSettingsObj(s);
-    vsNote((s.t0!=null && s.t1!=null)
-      ? `imported${s.name?` "${esc(s.name)}"`:''} — jumped to ${fmtDateTime(s.t0)} → ${fmtDateTime(s.t1)}`
-      : `imported${s.name?` "${esc(s.name)}"`:''}`);
+    let data;
+    try{ data=JSON.parse(reader.result); }
+    catch(err){ vsNote('could not read that file — is it a view exported from ⬇ Export view(s)?'); return; }
+    const imported=(Array.isArray(data)?data:[data]).filter(v=>v && typeof v==='object');
+    if(!imported.length){ vsNote('could not read that file — is it a view exported from ⬇ Export view(s)?'); return; }
+    // merged onto the END of whatever's already in the list, not replacing
+    // it — an import adds views to choose from, it doesn't reset the list.
+    VIEWS = VIEWS.concat(imported);
+    renderViewsList(VIEWS.length-1);   // land on the last one imported
+    applySelectedView();
+    vsNote(`imported ${imported.length} view${imported.length===1?'':'s'} — now showing "${esc(imported[imported.length-1].name||('View '+VIEWS.length))}"`);
   };
   reader.readAsText(file);
 });
@@ -1242,45 +1326,82 @@ function renderDetail(){
   buildStats(win);
   CTRL.hasChart=true;
 }
-// SVG text doesn't wrap or ellipsize on its own — a long alarm-type name in
-// the narrow left-margin lane label (e.g. "Exhalation Flow Sensor Fault",
-// "Check Patient Circuit Reconnection Failure") would otherwise extend past
-// x=0 and get clipped by the canvas edge from the FRONT (losing its first
-// few letters, e.g. "eck Patient Circuit"), not the end, since the label is
-// right-anchored. Truncate from the end with an ellipsis instead, so nothing
-// ever runs off-canvas; the full name is still available as a hover tooltip
-// and in the "Alarms in this window" list below the chart. CHAR_W is a
-// measured average glyph width for this label's font-size (8) in the page's
-// font, not a guess — calibrated against real rendered text.
-const LANE_LABEL_CHAR_W = 3.6;
+// SVG text doesn't wrap or ellipsize on its own — a long lane-label name
+// (an alarm type like "Exhalation Flow Sensor Fault", or a mode name like
+// "Confirm NIV CPAP-PS with Apnea Ventilation Mode Setting") would otherwise
+// extend past x=0 and get clipped by the canvas edge from the FRONT (losing
+// its first few letters, e.g. "eck Patient Circuit"), not the end, since the
+// label is right-anchored. Truncate from the end with an ellipsis instead,
+// so nothing ever runs off-canvas; the full name is still available as a
+// hover tooltip and in the ledger below the chart.
+//
+// Truncation is based on the ACTUAL rendered width of the candidate string
+// (via a hidden, reused <text> measured with getComputedTextLength()), not
+// an average-character-width guess — an earlier version used a flat
+// px-per-character estimate calibrated against one alarm name, which
+// undershot badly (labels still overflowing past x=0 by several px) for
+// strings dense with capital-letter abbreviations like mode names' "NIV
+// CPAP-PS" — capitals render noticeably wider than the mixed-case prose the
+// estimate was tuned on. Measuring the real string sidesteps that class of
+// mismatch entirely, for any label text.
+let LABEL_MEASURER = null;
+function measureLabelWidth(s){
+  if(!LABEL_MEASURER){
+    const svgNS='http://www.w3.org/2000/svg';
+    const msvg=document.createElementNS(svgNS,'svg');
+    msvg.setAttribute('style','position:absolute;visibility:hidden;width:0;height:0;overflow:hidden');
+    const t=document.createElementNS(svgNS,'text');
+    t.setAttribute('font-size','8');
+    msvg.appendChild(t);
+    document.body.appendChild(msvg);
+    LABEL_MEASURER = t;
+  }
+  LABEL_MEASURER.textContent = s;
+  return LABEL_MEASURER.getComputedTextLength();
+}
 function truncLabel(s, maxW){
-  if(s.length*LANE_LABEL_CHAR_W <= maxW) return s;
-  const n = Math.max(1, Math.floor(maxW/LANE_LABEL_CHAR_W) - 1);   // room for the trailing "…"
-  return s.slice(0, n) + '…';
+  if(measureLabelWidth(s) <= maxW) return s;
+  let lo=1, hi=s.length;   // binary search the longest prefix (+ "…") that still fits
+  while(lo<hi){
+    const mid=(lo+hi+1)>>1;
+    if(measureLabelWidth(s.slice(0,mid)+'…') <= maxW) lo=mid; else hi=mid-1;
+  }
+  return s.slice(0,lo)+'…';
 }
 function buildChart(win){
   const svg = document.getElementById('chart-d');
   const alarmTypes = [...new Set(win.alarms.map(a=>a[2]))]
         .sort((a,b)=>Object.keys(DATA.alarmColors).indexOf(a)-Object.keys(DATA.alarmColors).indexOf(b));
-  // modes are mutually exclusive over time (only one active at once) so they
-  // fit on a single swim-lane row, like the alarms lane but one row instead
-  // of one-per-type — sits above the alarm lane(s).
-  const modeLaneH = win.modes.length ? LANE_ROW + 4 : 0;
+  // one row per distinct mode NAME, same idea as the alarm-type lanes — but
+  // this block renders BELOW the Y-axis panels (see further down), not
+  // stacked above them with the alarms, so the two never read as one
+  // undifferentiated list of names: alarms stay the context above the data,
+  // modes are their own separate section after it.
+  const modeTypes = [...new Set(win.modes.map(m=>m[2]))]
+        .sort((a,b)=>Object.keys(DATA.modeColors).indexOf(a)-Object.keys(DATA.modeColors).indexOf(b));
+  const modeLaneH = modeTypes.length ? modeTypes.length*LANE_ROW + 8 : 0;
   const alarmLaneH = alarmTypes.length ? alarmTypes.length*LANE_ROW + 8 : 0;
-  const laneH = modeLaneH + alarmLaneH;
+  const modeGap = modeLaneH ? 16 : 0;   // breathing room between the last panel and the modes block
   const nV = VARS.length;
   const PH = panelHeights();                    // focused panel tall, the rest shrunk
   const N = win.samples.length, useIdx = N>0;   // index axis only when there's cyclic data
   const idxTop = useIdx ? IDX_TOP_H : 0;        // top index axis needs headroom
   const mTop = TOP + idxTop;                    // markers/crosshair start below the index axis
-  const H = TOP + idxTop + laneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + XAXIS_H;
+  const H = TOP + idxTop + alarmLaneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + modeGap + modeLaneH + XAXIS_H;
   svg.setAttribute('viewBox', `0 0 ${VB_W} ${H}`);
   // If cyclic recording began after the alarm/event log started, and that
   // boundary falls inside this window, reserve a small strip on the left (its
   // own linear time axis) for the pre-cyclic history, and shift the main plot
   // right to make room — otherwise that whole stretch collapses onto index 0.
   const hasBefore = useIdx && DATA.sampleMin > DATA.tMin && win.t0 < DATA.sampleMin && DATA.sampleMin <= win.t1;
-  const plotL0 = ML;                                          // true left margin (labels live here)
+  // Left margin sized to fit the longest lane label IN FULL, not a fixed
+  // guess — showing every letter of "Confirm NIV CPAP-PS with Apnea
+  // Ventilation Mode Setting" only works if there's room for it. Capped at
+  // a fraction of the canvas so one pathological outlier name can't crush
+  // the plot area to nothing; that cap is the only case truncLabel below
+  // still actually has to shorten anything for.
+  const maxLabelW = Math.max(0, ...alarmTypes.map(measureLabelWidth), ...modeTypes.map(measureLabelWidth));
+  const plotL0 = Math.min(VB_W*0.42, Math.max(ML, maxLabelW + 14));
   const beforeR = hasBefore ? plotL0 + BEFORE_W : plotL0;     // right edge of the before-strip
   const plotL = hasBefore ? beforeR + BEFORE_GAP : plotL0;    // main plot start, shifted when hasBefore
   const plotR = VB_W - MR;
@@ -1327,11 +1448,13 @@ function buildChart(win){
     const half = Math.max(center-mn, mx-center) + pad;
     return [center-half, center+half];
   });
-  const tops = []; { let y = TOP + idxTop + laneH;
+  const tops = []; { let y = TOP + idxTop + alarmLaneH;
     for(let k=0;k<nV;k++){ tops.push(y); y += PH[k] + PANEL_GAP; } }
   const panelTop = k => tops[k];
   const yOf = (k,val) => { const [mn,mx]=ranges[k]; return panelTop(k) + (1-(val-mn)/(mx-mn))*PH[k]; };
   const panelsBottom = panelTop(nV-1) + PH[nV-1];
+  const modesTop = panelsBottom + modeGap;             // modes block starts right after the last panel
+  const axisBottom = modeLaneH ? modesTop + modeLaneH : panelsBottom;   // x-axis sits below modes when present
   let parts = [];
   // the before-strip itself: a shaded, clickable/hoverable mini-timeline for the
   // pre-cyclic alarm/event history, drawn first so markers layer on top of it.
@@ -1344,7 +1467,7 @@ function buildChart(win){
       + `font-style="italic" fill="#a05a00">history</text>`);
   }
   if(alarmTypes.length){ const lblMaxW = plotL0 - 8;   // budget before the label's left edge hits x=0
-    alarmTypes.forEach((typ,r)=>{ const y = mTop + modeLaneH + r*LANE_ROW + LANE_ROW/2;
+    alarmTypes.forEach((typ,r)=>{ const y = mTop + r*LANE_ROW + LANE_ROW/2;
     const col = DATA.alarmColors[typ] || '#888';
     parts.push(`<text x="${plotL0-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(truncLabel(typ, lblMaxW))}<title>${esc(typ)}</title></text>`);
     // one bar per active interval (Activated→Deactivated) of this alarm type —
@@ -1377,6 +1500,22 @@ function buildChart(win){
     flush();
     parts.push(`<line class="hg" id="hg-d-${k}" x1="${plotL}" x2="${plotR}" y1="0" y2="0" stroke="#c0392b" stroke-width="0.8" stroke-dasharray="4 3" visibility="hidden"/>`);
     parts.push(`<circle class="dot" id="dot-d-${k}" r="3" fill="#c0392b" visibility="hidden"/>`); });
+  // modes: one row PER MODE NAME, placed below the Y-axis panels — its own
+  // block, separate from the alarm-type lanes above the panels, so the two
+  // never read as one undifferentiated list of names. Same truncated-label
+  // + tooltip treatment as alarms (now normally a no-op since plotL0 above
+  // is sized to fit the longest label already — kept as a safety net for
+  // the rare name long enough to hit that margin's own cap).
+  if(modeTypes.length){ const lblMaxW = plotL0 - 8;
+    parts.push(`<line x1="${plotL0}" y1="${panelsBottom + modeGap/2}" x2="${plotR}" y2="${panelsBottom + modeGap/2}" stroke="#e3e8ee" stroke-width="0.6"/>`);
+    modeTypes.forEach((name,r)=>{ const y = modesTop + r*LANE_ROW + LANE_ROW/2;
+    const col = DATA.modeColors[name] || MODE_COLOR;
+    parts.push(`<text x="${plotL0-6}" y="${y+3}" text-anchor="end" font-size="8" fill="${col}">${esc(truncLabel(name, lblMaxW))}<title>${esc(name)}</title></text>`);
+    for(const m of win.modes){ if(m[2]!==name) continue;
+      for(const [bx0,bx1] of barSegments(m[0], m[1])){
+        const x0=Math.max(plotL0,bx0), x1=Math.min(plotR,bx1);
+        parts.push(`<rect x="${x0.toFixed(1)}" y="${(y-5).toFixed(1)}" width="${Math.max(1.5,x1-x0).toFixed(1)}" height="10" fill="${col}" fill-opacity="0.85"><title>${esc(name)} · ${fmtDateTime(m[0])} → ${fmtDateTime(m[1])} (${fmtDur(m[1]-m[0])})</title></rect>`);
+      } } }); }
   const nTicks=6;
   if(useIdx){
     // ticks sit at even INDEX positions; each carries its sample number (top)
@@ -1384,22 +1523,22 @@ function buildChart(win){
     // adjacent ticks visibly reveals a cyclic gap.
     const topY = TOP + idxTop;
     parts.push(`<text x="${plotL0-6}" y="${topY-4}" text-anchor="end" font-size="8" fill="#0a6ebd" font-weight="bold">#index</text>`);
-    parts.push(`<text x="${plotL0-6}" y="${panelsBottom+14}" text-anchor="end" font-size="8" fill="#5b6b7b" font-weight="bold">time</text>`);
+    parts.push(`<text x="${plotL0-6}" y="${axisBottom+14}" text-anchor="end" font-size="8" fill="#5b6b7b" font-weight="bold">time</text>`);
     for(let i=0;i<=nTicks;i++){ const k=Math.round((N-1)*i/nTicks); const x=xOfIdx(k);
       // top index axis
       parts.push(`<line x1="${x}" y1="${topY-3}" x2="${x}" y2="${topY}" stroke="#0a6ebd"/>`);
       parts.push(`<text x="${x}" y="${topY-5}" text-anchor="middle" font-size="8" fill="#0a6ebd">${win.gi0+k}</text>`);
       // bottom time axis (date shown on the first tick and whenever the day rolls)
-      const t=ST[k]; parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
+      const t=ST[k]; parts.push(`<line x1="${x}" y1="${axisBottom}" x2="${x}" y2="${axisBottom+4}" stroke="#5b6b7b"/>`);
       const prevK = Math.round((N-1)*(i-1)/nTicks);
       const showDate = i===0 || (i>0 && fmtDate(ST[prevK])!==fmtDate(t));
-      parts.push(`<text x="${x}" y="${panelsBottom+14}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTime(t)}</text>`);
-      if(showDate) parts.push(`<text x="${x}" y="${panelsBottom+24}" text-anchor="middle" font-size="7.5" fill="#8a97a6">${fmtDate(t)}</text>`);
+      parts.push(`<text x="${x}" y="${axisBottom+14}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTime(t)}</text>`);
+      if(showDate) parts.push(`<text x="${x}" y="${axisBottom+24}" text-anchor="middle" font-size="7.5" fill="#8a97a6">${fmtDate(t)}</text>`);
     }
   } else {
     for(let i=0;i<=nTicks;i++){ const t=win.t0+dur*i/nTicks; const x=xOf(t);
-      parts.push(`<line x1="${x}" y1="${panelsBottom}" x2="${x}" y2="${panelsBottom+4}" stroke="#5b6b7b"/>`);
-      parts.push(`<text x="${x}" y="${panelsBottom+15}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTime(t)}</text>`); }
+      parts.push(`<line x1="${x}" y1="${axisBottom}" x2="${x}" y2="${axisBottom+4}" stroke="#5b6b7b"/>`);
+      parts.push(`<text x="${x}" y="${axisBottom+15}" text-anchor="middle" font-size="8.5" fill="#5b6b7b">${fmtTime(t)}</text>`); }
   }
   // If cyclic recording began after the alarm/event log started, and that
   // boundary falls inside this window, mark it with a separator — everything
@@ -1415,35 +1554,14 @@ function buildChart(win){
     parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 3"/>`);
     parts.push(`<text x="${x}" y="${mTop-1}" text-anchor="middle" font-size="8" font-weight="bold" fill="#c0392b">${fmtHM(b[0])}</text>`);
     parts.push(`<rect class="burst-hit" x="${x-5}" y="${mTop}" width="10" height="${panelsBottom-mTop}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTime(b[0])} — click to see in chat</title></rect>`); }
-  // modes: a single swim-lane of coloured bars (one per active mode
-  // interval), the same technique as the alarm lane just below it — replaces
-  // the old dashed-line-plus-label rendering, which collided/overlapped
-  // whenever mode changes were dense.
-  if(win.modes.length){
-    const y0 = mTop + 2, hgt = Math.max(4, modeLaneH - 4);
-    parts.push(`<text x="${plotL0-6}" y="${mTop+modeLaneH/2+3}" text-anchor="end" font-size="8" fill="${MODE_COLOR}">mode</text>`);
-    for(const m of win.modes){
-      const col = DATA.modeColors[m[2]] || MODE_COLOR;
-      for(const [bx0,bx1] of barSegments(m[0], m[1])){
-        const x0=Math.max(plotL0,bx0), x1=Math.min(plotR,bx1);
-        parts.push(`<rect x="${x0.toFixed(1)}" y="${y0.toFixed(1)}" width="${Math.max(1.5,x1-x0).toFixed(1)}" height="${hgt.toFixed(1)}" fill="${col}" fill-opacity="0.85"><title>${esc(m[2])} · ${fmtDateTime(m[0])} → ${fmtDateTime(m[1])} (${fmtDur(m[1]-m[0])})</title></rect>`);
-      }
-    }
-  }
-  // a faint rule between the mode row and the alarm-type rows below it — on
-  // their own the two stacked lanes read as one undifferentiated list of
-  // names; this makes clear "mode" is its own row, not the first alarm.
-  if(modeLaneH && alarmLaneH){
-    const sepY = mTop + modeLaneH;
-    parts.push(`<line x1="${plotL0}" y1="${sepY}" x2="${plotR}" y2="${sepY}" stroke="#e3e8ee" stroke-width="0.6"/>`);
-  }
   // settings/data-change events: teal ticks along the top, plus a tick below the
-  // time/date axis that lines up with the titles listed below the chart
+  // time/date axis that lines up with the titles listed below the chart —
+  // the axis (and this tick) sit below the modes block now, when there is one.
   for(const e of win.events){ const x=xOfAny(e[0]);
     parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${mTop+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`);
-    parts.push(`<line x1="${x}" y1="${panelsBottom+30}" x2="${x}" y2="${panelsBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`); }
-  parts.push(`<line id="ev-pick-d" x1="0" x2="0" y1="${mTop}" y2="${panelsBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
-  parts.push(`<line class="cx" id="cx-d" x1="0" x2="0" y1="${mTop}" y2="${panelsBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
+    parts.push(`<line x1="${x}" y1="${axisBottom+30}" x2="${x}" y2="${axisBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`); }
+  parts.push(`<line id="ev-pick-d" x1="0" x2="0" y1="${mTop}" y2="${axisBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
+  parts.push(`<line class="cx" id="cx-d" x1="0" x2="0" y1="${mTop}" y2="${axisBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
   svg.innerHTML = parts.join('');
   const ro = document.getElementById('readout-d');
   // Readout lists EVERY present variable — deselecting one in the Y-axis picker

@@ -52,51 +52,9 @@ from wa_report.cyclic_report import (
 )
 
 
-_README_TXT_NAME = "README - read this first.txt"
 
 
-def _linked_pages_readme(pages: dict[str, str]) -> str:
-    """Plain-text instructions bundled inside the ZIP.
 
-    ``charts.html`` is now a single self-contained file (the Timeline / Patients
-    views are in-page tabs inside it, not separate files) — it
-    opens correctly on its own no matter how it's extracted. The only
-    cross-file link left is ``report.html`` <-> ``charts.html`` (the chat,
-    only present when a WhatsApp export was uploaded), which still only
-    resolves when both sit in the *same* real folder. The most common way
-    that breaks: on Windows/macOS you can double-click a file straight out of
-    a ZIP's built-in preview without ever extracting it — the OS then
-    silently pulls out just that ONE file into a private temp folder, so the
-    link to the other page 404s. This note exists so that failure mode
-    doesn't look like a bug.
-    """
-    names = ", ".join(sorted(pages))
-    if len(pages) <= 1:
-        return (
-            "HOW TO OPEN THIS REPORT\n"
-            "========================\n\n"
-            "This ZIP holds one self-contained page: " + names + ".\n"
-            "Just extract the ZIP and double-click it — no other files are needed.\n"
-        )
-    return (
-        "HOW TO OPEN THIS REPORT\n"
-        "========================\n\n"
-        "This ZIP holds two linked pages: " + names + " (the chat links to the "
-        "charts page and back). They only find each other when they're sitting\n"
-        "together in one real folder on disk.\n\n"
-        "1. Right-click the downloaded ZIP file and choose \"Extract All\"\n"
-        "   (Windows) or double-click it in Finder (macOS) to unpack it into\n"
-        "   its own folder.\n"
-        "2. Open that extracted folder and double-click one of the .html\n"
-        "   files (charts.html or report.html) from there.\n\n"
-        "Do NOT open a page directly from inside the ZIP's own preview window\n"
-        "(the one you get without extracting first) — Windows/macOS will\n"
-        "quietly copy out only that single file to a temporary folder, and\n"
-        "the link to the other page will then fail to open.\n\n"
-        "Do this on every computer the report is shared with — extracting it\n"
-        "once on your own machine does not carry over when you re-zip or\n"
-        "re-send just one .html file.\n"
-    )
 
 
 def _save_uploads_to_tempdir(uploads: list[tuple[str, bytes]], prefix: str) -> Path:
@@ -304,7 +262,6 @@ if submitted:
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 for name, html_str in pages.items():
                     zf.writestr(name, html_str)
-                zf.writestr(_README_TXT_NAME, _linked_pages_readme(pages))
             sizes = " + ".join(f"{name} ({len(h) // 1024} KB)"
                                for name, h in pages.items())
             n = len(pages)
@@ -324,7 +281,7 @@ if submitted:
                     "Windows/macOS then pulls out only that one file into a temporary "
                     "folder on its own, and the link to the other page breaks). Do this "
                     "on every computer that opens the report, not just this one. See the "
-                    "included README.txt for the same steps."
+                   
                 )
             else:
                 st.caption(
