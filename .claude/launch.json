@@ -6,6 +6,18 @@
       "runtimeExecutable": "C:/Users/Owner/.conda/envs/wp/python.exe",
       "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless=true", "--server.port=8533"],
       "port": 8533
+    },
+    {
+      "name": "cyclic-webapp-backend",
+      "runtimeExecutable": "C:/Users/Owner/.conda/envs/wp/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "webapp.backend.app.main:app", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "cyclic-webapp-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "webapp/frontend", "run", "dev", "--", "--port", "5173"],
+      "port": 5173
     }
   ]
 }

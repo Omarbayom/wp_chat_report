@@ -1,0 +1,19 @@
+:root {
+  color-scheme: light dark;
+  font: 14px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: #f3f5f8;
+  color: #1d2733;
+}
+
+@media (prefers-color-scheme: dark) {
+  body { background: #12151a; color: #dbe2ea; }
+}

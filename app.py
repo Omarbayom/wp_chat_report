@@ -52,6 +52,53 @@ from wa_report.cyclic_report import (
 )
 
 
+_README_TXT_NAME = "README - read this first.txt"
+
+
+def _linked_pages_readme(pages: dict[str, str]) -> str:
+    """Plain-text instructions bundled inside the ZIP.
+
+    ``charts.html`` is now a single self-contained file (the Timeline / Patients
+    views are in-page tabs inside it, not separate files) — it
+    opens correctly on its own no matter how it's extracted. The only
+    cross-file link left is ``report.html`` <-> ``charts.html`` (the chat,
+    only present when a WhatsApp export was uploaded), which still only
+    resolves when both sit in the *same* real folder. The most common way
+    that breaks: on Windows/macOS you can double-click a file straight out of
+    a ZIP's built-in preview without ever extracting it — the OS then
+    silently pulls out just that ONE file into a private temp folder, so the
+    link to the other page 404s. This note exists so that failure mode
+    doesn't look like a bug.
+    """
+    names = ", ".join(sorted(pages))
+    if len(pages) <= 1:
+        return (
+            "HOW TO OPEN THIS REPORT\n"
+            "========================\n\n"
+            "This ZIP holds one self-contained page: " + names + ".\n"
+            "Just extract the ZIP and double-click it — no other files are needed.\n"
+        )
+    return (
+        "HOW TO OPEN THIS REPORT\n"
+        "========================\n\n"
+        "This ZIP holds two linked pages: " + names + " (the chat links to the "
+        "charts page and back). They only find each other when they're sitting\n"
+        "together in one real folder on disk.\n\n"
+        "1. Right-click the downloaded ZIP file and choose \"Extract All\"\n"
+        "   (Windows) or double-click it in Finder (macOS) to unpack it into\n"
+        "   its own folder.\n"
+        "2. Open that extracted folder and double-click one of the .html\n"
+        "   files (charts.html or report.html) from there.\n\n"
+        "Do NOT open a page directly from inside the ZIP's own preview window\n"
+        "(the one you get without extracting first) — Windows/macOS will\n"
+        "quietly copy out only that single file to a temporary folder, and\n"
+        "the link to the other page will then fail to open.\n\n"
+        "Do this on every computer the report is shared with — extracting it\n"
+        "once on your own machine does not carry over when you re-zip or\n"
+        "re-send just one .html file.\n"
+    )
+
+
 def _save_uploads_to_tempdir(uploads: list[tuple[str, bytes]], prefix: str) -> Path:
     """Write uploaded ZIP(s) into a fresh temp folder and return it.
 
@@ -125,7 +172,7 @@ st.caption(
     "Upload any combination of a **WhatsApp export** (chat), the ventilator's "
     "**cyclic log(s)**, and the **alarm log(s)** — each box accepts several files, "
     "stitched together by time (overlapping rows are de-duplicated). You get the "
-    "interactive pages (cyclic charts, windowed view, chat, patients); when a "
+    "interactive pages (cyclic timeline charts, chat, patients); when a "
     "WhatsApp export is included, the printable **Word** report is offered too."
 )
 
@@ -220,7 +267,7 @@ if submitted:
                         hospital=hospital.strip(), device_label=label.strip(),
                         alarms_source=_csv_sources(alarm_up),
                         min_photos=int(min_photos), window_minutes=int(burst_gap),
-                        window_hours=int(window_hours), windows_hours=int(window_hours),
+                        window_hours=int(window_hours),
                         max_img_dim=int(max_dim), mode=mode,
                         buffer_minutes=int(buffer_minutes),
                     )
@@ -257,6 +304,7 @@ if submitted:
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 for name, html_str in pages.items():
                     zf.writestr(name, html_str)
+                zf.writestr(_README_TXT_NAME, _linked_pages_readme(pages))
             sizes = " + ".join(f"{name} ({len(h) // 1024} KB)"
                                for name, h in pages.items())
             n = len(pages)
@@ -266,11 +314,25 @@ if submitted:
                 data=buf.getvalue(), file_name="linked_report.zip",
                 mime="application/zip",
             )
-            st.caption(
-                "Preview of the stock overview (charts.html). Its cross-links to the "
-                "windowed / chat / patient pages work once the ZIP is extracted into "
-                "one folder."
-            )
+            if n > 1:
+                st.warning(
+                    "⚠️ **Extract the whole ZIP into one folder before opening anything.** "
+                    "The chat and charts pages link to each other by filename, so they "
+                    "only find each other when they sit **side by side on disk**. "
+                    "Right-click the downloaded ZIP → **Extract All** (don't double-click "
+                    "a page straight out of the ZIP's file-explorer preview — "
+                    "Windows/macOS then pulls out only that one file into a temporary "
+                    "folder on its own, and the link to the other page breaks). Do this "
+                    "on every computer that opens the report, not just this one. See the "
+                    "included README.txt for the same steps."
+                )
+            else:
+                st.caption(
+                    "charts.html is a single self-contained file (Timeline / Patients "
+                    "are in-page tabs inside it) — extract it and open it, "
+                    "no other files needed."
+                )
+            st.caption("Preview of the timeline overview (charts.html) below.")
             components.html(pages["charts.html"], height=760, scrolling=True)
 
         # --- Word report ---

@@ -56,6 +56,16 @@ DEFAULT_VARIABLES = ["VTi", "VTe", "PIP"]
 LINE_COLOR = "#0a6ebd"   # cyclic trace
 MARK_COLOR = "#c0392b"   # photo-burst marker
 
+# Distinct colours assigned (in first-seen order) to each ventilation mode
+# name actually present in a given device's data, for the mode swim-lane
+# (mirrors how alarms get a colour per type via ALARM_COLORS, except the set
+# of mode names isn't fixed device-wide — it varies by CSV — so this is a
+# palette to cycle through rather than a name->colour dict).
+MODE_COLOR_PALETTE = [
+    "#6f42c1", "#0aa3a3", "#e67e22", "#2e8b57", "#c0392b",
+    "#1f77b4", "#8e44ad", "#16a085", "#d35400", "#7f8c8d",
+]
+
 # Alarms drawn in the alarm lane, coloured by type. A Log-CSV row is treated as
 # an **alarm** iff its text is a key here (exact, case-sensitive match); anything
 # else in the Log is treated as a settings/data-change **event**. This is the full
