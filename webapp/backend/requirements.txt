@@ -1,0 +1,9 @@
+# FastAPI backend for the React cyclic-report web app.
+# Install into the same env as the rest of this repo (conda env "wp"):
+#   pip install -r webapp/backend/requirements.txt
+#
+# Reuses wa_report/cyclic_report's existing pandas-based parsing — pandas
+# itself comes from the repo root requirements.txt, not repeated here.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
