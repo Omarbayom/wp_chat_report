@@ -1834,21 +1834,39 @@ function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
   // the same way a fully alarm-only window does (see the else branch below).
   const inBefore = CTRL.hasBefore && t < DATA.sampleMin;
   let anchor, lo, hi;
-  if(hasSamples && !inBefore){
-    // magnetic alarm snap: if the cursor is within ALARM_SNAP_PX of an alarm,
-    // anchor to that alarm so alarms stay reachable even amid dense samples.
-    // *exact* (from the time-search / arrow keys) disables the magnet.
-    // pixel-based magnet: snap onto an alarm when it's within ALARM_SNAP_PX of the
-    // cursor. Distance is measured in pixels (via xOfAny, so the before-strip's
-    // own axis is respected) because the index axis is non-linear in time, so a
-    // fixed time tolerance would misbehave near gaps.
-    const at=CTRL.alarmT; let snap=false, ai=-1;
-    if(!exact && at && at.length){ ai=nearestMs(at,t);
-      if(Math.abs(CTRL.xOfAny(at[ai])-CTRL.xOfAny(t))<=ALARM_SNAP_PX){ anchor=at[ai]; snap=true; } }
-    const si=nearest(win.samples, snap?anchor:t); if(si<0) return;
-    const s=win.samples[si]; if(!snap) anchor=s[0];
+  // magnetic alarm snap: if the cursor is within ALARM_SNAP_PX of an alarm,
+  // anchor to that alarm so alarms stay reachable even amid dense samples.
+  // *exact* (from the time-search / arrow keys) disables the magnet. Computed
+  // up front (not inside the branch below) because it can pull the cursor
+  // onto an alarm regardless of whether that alarm's own moment happens to
+  // have cyclic coverage or not.
+  // pixel-based magnet: snap onto an alarm when it's within ALARM_SNAP_PX of the
+  // cursor. Distance is measured in pixels (via xOfAny, so the before-strip's
+  // own axis is respected) because the index axis is non-linear in time, so a
+  // fixed time tolerance would misbehave near gaps.
+  const at=CTRL.alarmT; let snap=false, ai=-1;
+  if(hasSamples && !inBefore && !exact && at && at.length){
+    ai=nearestMs(at,t);
+    if(Math.abs(CTRL.xOfAny(at[ai])-CTRL.xOfAny(t))<=ALARM_SNAP_PX) snap=true;
+  }
+  // Is the cursor actually sitting on (or magnet-snapped near) real cyclic
+  // coverage? "this window has samples somewhere" is NOT the same question —
+  // a window can hold both a dense cyclic stretch AND a real gap (e.g. a
+  // Standby period logs no cyclic samples at all), and the nearest sample to
+  // a cursor inside that gap can be far away in time. Only treat the cursor
+  // as "on data" when it's within normal coverage of an actual sample (or
+  // snapped onto an alarm) — a gap, even inside an otherwise-covered window,
+  // gets exactly the same treatment as a fully alarm-only window below.
+  let si=-1;
+  if(hasSamples && !inBefore) si=nearest(win.samples, snap?at[ai]:t);
+  const onData = si>=0 && (snap || Math.abs(win.samples[si][0]-t)<=COVER_TOL);
+
+  if(onData){
+    const s=win.samples[si]; anchor = snap? at[ai] : s[0];
     const sx=CTRL.xOfIdx ? CTRL.xOfIdx(si) : CTRL.xOf(s[0]);
-    // is there actually cyclic data at the anchor? (else values read "—")
+    // is there actually cyclic data at the anchor? (else values read "—") —
+    // always true here when !snap (that's what onData just required), but a
+    // snapped alarm can still land inside a gap, so keep the check for it.
     const covered = Math.abs(s[0]-anchor) <= COVER_TOL;
     // values for ALL present variables (readings kept even when the graph is off)
     ALLVARS.forEach((v,i)=>{ const cell=document.getElementById('ro-d-v'+i); if(!cell) return;
@@ -1868,23 +1886,26 @@ function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
       hi = si<win.samples.length-1 ? (s[0]+win.samples[si+1][0])/2 : Infinity;
     }
   } else {
-    // no cyclic data behind the cursor — either a genuinely alarm-only window,
-    // or the pre-cyclic before-strip of a mixed one — snap to the nearest ALARM
-    // (then event / mode / burst) so that history can still be browsed. While
-    // in the before-strip, stick to pre-cyclic entries so the cursor doesn't
-    // jump out into the main plot.
+    // no real cyclic data behind the cursor — a fully alarm-only window, the
+    // pre-cyclic before-strip of a mixed one, OR (see onData above) a gap
+    // inside an otherwise-covered window — snap to the nearest ALARM (then
+    // event / mode / burst) so that history can still be browsed exactly like
+    // a fully alarm-only window would. While in the before-strip specifically,
+    // stick to pre-cyclic entries so the cursor doesn't jump out into the main
+    // plot; an in-window gap has no such restriction (any alarm/event/mode in
+    // the whole log is fair game, not just ones inside the gap itself).
     const cap = a => !inBefore || a[0] < DATA.sampleMin;
     const src = win.alarms.filter(cap).length ? win.alarms.filter(cap)
               : win.events.filter(cap).length ? win.events.filter(cap)
               : win.modes.filter(cap).length ? win.modes.filter(cap) : win.bursts.filter(cap);
     if(!src || !src.length) return;
     const times = src.map(a=>a[0]);
-    const ai=nearestMs(times, t); anchor=times[ai];
+    const gi=nearestMs(times, t); anchor=times[gi];
     ALLVARS.forEach((v,i)=>{ const cell=document.getElementById('ro-d-v'+i); if(cell) cell.textContent='—'; });
     VARS.forEach((v,k)=>{ const hg=document.getElementById('hg-d-'+k), dot=document.getElementById('dot-d-'+k);
       if(hg) hg.setAttribute('visibility','hidden'); if(dot) dot.setAttribute('visibility','hidden'); });
-    lo = ai>0 ? (times[ai-1]+anchor)/2 : -Infinity;
-    hi = ai<times.length-1 ? (anchor+times[ai+1])/2 : Infinity;
+    lo = gi>0 ? (times[gi-1]+anchor)/2 : -Infinity;
+    hi = gi<times.length-1 ? (anchor+times[gi+1])/2 : Infinity;
   }
   const x = (CTRL.hasBefore && anchor < DATA.sampleMin) ? CTRL.beforeXOf(anchor) : CTRL.xOf(anchor);
   const cx=document.getElementById('cx-d'); cx.setAttribute('x1',x); cx.setAttribute('x2',x); cx.setAttribute('visibility','visible');
