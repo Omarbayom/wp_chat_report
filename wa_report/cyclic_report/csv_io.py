@@ -103,9 +103,18 @@ def parse_datetimes(s: "pd.Series", dayfirst: bool = True) -> "pd.Series":
 
     ISO timestamps (``YYYY-MM-DD HH:MM:SS``) have an unambiguous day/month order,
     so they are parsed without ``dayfirst`` — passing it would make pandas warn
-    that it's being ignored. For slash-style dates we try *dayfirst* first and, if
-    that leaves many values unparsed, the other order, keeping whichever parses
-    more. Handles ISO, ``DD/MM/YYYY`` and ``MM/DD/YYYY`` exports transparently.
+    that it's being ignored. For slash-style dates (a PC set to a US-style
+    regional format exports ``MM/DD/YYYY`` instead of ``DD/MM/YYYY``, e.g. "9/14"
+    for the 14th of September) we try *dayfirst* first and fall back to the other
+    order if that leaves many values unparsed — but a wrong day/month order
+    doesn't only produce unparseable rows: any row whose day-of-month happens to
+    be <= 12 parses "successfully" either way, just to the wrong date, which a
+    plain NaN count can't see. A device's CSV export is one contiguous log
+    (hours to at most a couple of weeks), so if BOTH orders parse comparably
+    well we additionally keep whichever order describes the tighter, more
+    plausible span — the wrong order silently scatters what should be a short
+    window across months, which is exactly the tell. Handles ISO, ``DD/MM/YYYY``
+    and ``MM/DD/YYYY`` exports transparently.
     """
     sample = s.dropna().astype(str).head(20)
     looks_iso = len(sample) > 0 and sample.str.match(_ISO_RE).mean() > 0.5
@@ -117,8 +126,24 @@ def parse_datetimes(s: "pd.Series", dayfirst: bool = True) -> "pd.Series":
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         a = pd.to_datetime(s, errors="coerce", dayfirst=dayfirst)
-        if a.isna().mean() > 0.3:
-            b = pd.to_datetime(s, errors="coerce", dayfirst=not dayfirst)
-            if b.notna().sum() > a.notna().sum():
-                return b
-        return a
+        other = pd.to_datetime(s, errors="coerce", dayfirst=not dayfirst)
+
+    na, nb = a.notna().sum(), other.notna().sum()
+    if na == 0:
+        return other
+    if nb > na:
+        return other                      # the other order unambiguously parses more rows
+
+    # `a` parsed as many rows (or more) than the other order — the NaN count
+    # alone says keep it. But if the other order parsed *almost* as many rows
+    # (i.e. every row's day-of-month happens to be <= 12, so both orders
+    # "succeed"), that's the silent-swap scenario above: compare spans and
+    # only switch if the other order is a clearly tighter, more plausible log.
+    if nb >= na * 0.9:
+        a_valid, o_valid = a.dropna(), other.dropna()
+        if len(a_valid) and len(o_valid):
+            span_a = a_valid.max() - a_valid.min()
+            span_o = o_valid.max() - o_valid.min()
+            if span_o * 3 < span_a:       # other order is >=3x tighter — not a coincidence
+                return other
+    return a

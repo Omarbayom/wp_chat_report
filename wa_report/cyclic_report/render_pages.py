@@ -458,7 +458,6 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .controls select, .controls button { font:inherit; font-size:13px; padding:6px 10px; border-radius:6px; border:1px solid #cfd8e3; background:#fff; cursor:pointer; }
   .controls button.primary { background:#0a6ebd; color:#fff; border-color:#0a6ebd; }
   .controls button:hover { border-color:#0a6ebd; }
-  .controls .q-crop-lbl { display:flex; align-items:center; gap:5px; font-size:12px; color:#5b6b7b; padding-bottom:6px; cursor:pointer; }
   .controls .span { font-size:12px; color:#1d2733; margin-left:auto; text-align:right; line-height:1.4; }
   .controls .span b { color:#0a6ebd; }
   .varbar { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
@@ -521,9 +520,20 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .ledger-sec:first-of-type { margin-top:0; }
   summary.ledger-h { cursor:pointer; margin:0; list-style:revert; }
   summary.ledger-h::marker { font-size:10px; color:#5b6b7b; }
-  .ledger-sec .chips { margin-top:4px; }
-  .ledger .chips { display:flex; flex-wrap:wrap; gap:5px;
+  .ledger-sec .chips { margin-top:0; }
+  .ledger .chips { display:flex; flex-wrap:wrap; align-content:flex-start; gap:5px;
     user-select:text; -webkit-user-select:text; }
+  /* each group's chip list: a fixed-height scrollable box you can drag taller
+     or shorter (native resize handle, bottom-right corner), clamped so it
+     never shrinks to nothing or grows past a sane ceiling */
+  .ledger-filter { display:flex; align-items:center; gap:8px; margin:4px 0 5px; }
+  .ledger-filter input { font:inherit; font-size:11.5px; padding:3px 9px; flex:1; min-width:0;
+    border:1px solid #cfd8e3; border-radius:12px; color:#1d2733; }
+  .ledger-filter input:focus { outline:none; border-color:#0a6ebd; }
+  .lf-count { font-size:10.5px; color:#8a97a6; white-space:nowrap; }
+  .ledger-box { height:170px; min-height:56px; max-height:640px; overflow-y:auto; resize:vertical;
+    border:1px solid #e3e8ee; border-radius:8px; padding:6px 8px; background:#fbfcfd; }
+  .chip[hidden] { display:none; }
   .chip { font-size:11.5px; border-radius:14px; padding:2px 9px; cursor:pointer;
     user-select:text; -webkit-user-select:text; background:#e9f7f7; border:1px solid #b6e4e4; color:#14555a; }
   .chip b { font-variant-numeric:tabular-nums; color:#0aa3a3; margin-right:5px; font-weight:700; }
@@ -611,6 +621,7 @@ __NOTES__
 <div class="vs-list-bar" id="vs-list-bar" hidden>
   <span class="lbl">Views:</span>
   <select id="vs-select" title="Pick a view to switch to it right away"></select>
+  <button type="button" id="vs-back" title="Jump back to the picked view — useful after you've since dragged/moved the window away from it, since re-picking the same already-selected item in the dropdown above does nothing on its own">↺ Back to view</button>
   <button type="button" id="vs-remove" title="Remove the picked view from this list (already-exported files are unaffected)">✕ Remove</button>
   <button type="button" id="vs-clear" title="Remove every view from this list">clear all</button>
 </div>
@@ -624,9 +635,6 @@ __NOTES__
   </label>
   <button class="primary" id="q-apply">Set range</button>
   <button id="q-reset">Full range</button>
-  <label class="q-crop-lbl" title="When checked, 'Set range' also crops the overview strip itself to this span (hiding data outside it), instead of just moving the window inside the full-length overview">
-    <input type="checkbox" id="q-crop"> Crop overview to range
-  </label>
   <label class="q">Window width
     <select id="q-width" onchange="setWidthHours(+this.value)">
       <option value="1">1 hour</option>
@@ -788,15 +796,13 @@ const OV_L = 70, OV_R = VB_W - 16, OV_TOP = 10, OV_CH = 150, OV_GAP = 8, OV_LANE
 
 const TMIN = DATA.tMin, TMAX = DATA.tMax;                // full data bounds
 const MINW = 60000;                                     // smallest window = 1 minute
-// By default the overview shows the WHOLE log (REGION == [TMIN,TMAX]) and SEL
-// is just the single draggable/resizable window inside it — the detail chart
-// shows SEL, nothing crops the overview itself. The "Crop overview to range"
-// checkbox next to "Set range" brings back the older behaviour where REGION
-// itself narrows to the typed span (see setRegionCrop/resetRegionCrop below):
-// the overview strip is redrawn to only that span, so data outside it is
-// genuinely hidden, not just scrolled past — and since SEL always fills the
-// current REGION right after "Set range", the window brush fills the whole
-// (now-narrower) overview, matching what "Full range" restores.
+// The overview initially shows the WHOLE log (REGION starts at [TMIN,TMAX])
+// with SEL as the single draggable/resizable window inside it. Typing a
+// range and hitting "Set range" (see setRegion below) narrows REGION itself
+// to that span and redraws the overview strip to only that span, so data
+// outside it is genuinely hidden, not just scrolled past — SEL then fills
+// the whole (now-narrower) overview to match. "Full range" restores REGION
+// to [TMIN,TMAX].
 const REGION = { r0: TMIN, r1: TMAX };
 let SEL = { t0: TMIN, t1: TMIN };
 const CTRL = { locked:false };
@@ -842,11 +848,12 @@ function onVarToggle(){
 }
 
 // ============================ OVERVIEW (timeline) ============================
-// The overview spans REGION (by default the whole log, [TMIN,TMAX]) with a
+// The overview spans REGION (starting at the whole log, [TMIN,TMAX]) with a
 // draggable/resizable window (SEL) inside it picking the detail sub-range.
-// REGION only narrows when "Crop overview to range" is used (setRegionCrop);
-// otherwise it never changes and SEL is the only thing that moves. Axis
-// ticks always span REGION, whatever it currently is.
+// REGION narrows to whatever span "Set range" was last given (setRegion) and
+// is restored to the full log by "Full range" — the cross-tab deep link and
+// patient-link navigation never touch it, only SEL. Axis ticks always span
+// REGION, whatever it currently is.
 function ovX(t){ return OV_L + (t-REGION.r0)/regSpan()*(OV_R-OV_L); }
 function ovT(x){ return REGION.r0 + (x-OV_L)/(OV_R-OV_L)*regSpan(); }
 function inRegion(t){ return t>=REGION.r0 && t<=REGION.r1; }
@@ -977,15 +984,12 @@ function updateBrushRects(){
 })();
 
 // ============================ window (brush) state ============================
-// SEL is the ONE draggable/resizable thing on the overview. By default the
-// overview itself always shows the whole log (REGION == [TMIN,TMAX]), so
-// there's nothing else on screen that could look "stuck": if SEL ever
-// equalled the full width with no way to crop the overview too, it would
-// have no room to slide, which is the "window isn't moving" bug this
-// replaced. If "Crop overview to range" narrows REGION, SEL again fills the
-// full (now-narrower) width right after — that's intended there: the
-// overview itself has been resized to match, not left stuck. setSel also
-// mirrors the window's
+// SEL is the ONE draggable/resizable thing on the overview. Right after
+// "Set range" narrows REGION, SEL fills that whole (now-narrower) width —
+// that's intended, not the old "window isn't moving" bug (SEL stuck at full
+// width with no way to also resize the overview around it): here the
+// overview itself has been resized to match, so there's still nothing else
+// on screen that could look stuck. setSel also mirrors the window's
 // bounds into the Range start/end fields, so typing exact times and reading
 // back the current window use the same two fields.
 function setSel(t0, t1, skipDetail){
@@ -1027,47 +1031,36 @@ function gotoAlarm(dir){
   setSel(a, b); setTimeout(()=>lockAt(target), 40);
 }
 // ============================ typed-time window controls ============================
-// "Set range" / "Full range" (and the cross-tab ?from&to deep link, and the
-// Patients tab's "Open charts for this patient" link) all just move/resize
-// the ONE window by default — the function name `applyRegion` is kept
-// because it's part of the exported cross-tab API (window.PAGES.charts), not
-// because there's still a region to apply there. Those programmatic callers
-// deliberately never crop: jumping to a moment from another tab should keep
-// the full log visible for context. Only the on-page "Crop overview to
-// range" checkbox (q-crop), read directly by the q-apply/q-reset button
-// handlers below, opts into narrowing REGION itself — see setRegionCrop.
+// "Set range" narrows REGION itself to the typed span and redraws the
+// overview strip to match — data outside the typed range is genuinely
+// hidden, not just scrolled past — then the window (SEL) fills that whole
+// (now-narrower) overview. "Full range" restores REGION to the full log.
+// The cross-tab ?from&to deep link and the Patients tab's "Open charts for
+// this patient" link go through `applyRegion` instead, which ONLY
+// moves/resizes SEL and never touches REGION — jumping to a moment from
+// another tab should keep the full log visible for context, not crop it.
+function setRegion(a, b){
+  a=Math.max(TMIN, Math.min(a, TMAX)); b=Math.max(TMIN, Math.min(b, TMAX));
+  if(b<a){ const t=a; a=b; b=t; }
+  if(b-a < MINW){ b=Math.min(TMAX, a+MINW); a=Math.max(TMIN, b-MINW); }
+  REGION.r0=a; REGION.r1=b;
+  buildOverview();
+  setSel(a, b);
+}
 function applyRegion(a, b){
   a=Math.max(TMIN, Math.min(a, TMAX)); b=Math.max(TMIN, Math.min(b, TMAX));
   if(b<a){ const t=a; a=b; b=t; }
   if(b-a < MINW){ b=Math.min(TMAX, a+MINW); a=Math.max(TMIN, b-MINW); }
   setSel(a, b);
 }
-// Narrows REGION itself to [a,b] and redraws the overview strip to match, so
-// data outside the typed range is genuinely hidden (not just scrolled past)
-// — the pre-existing older behaviour, opt-in via the "Crop overview to
-// range" checkbox. Bounds/min-width logic mirrors applyRegion.
-function setRegionCrop(a, b){
-  a=Math.max(TMIN, Math.min(a, TMAX)); b=Math.max(TMIN, Math.min(b, TMAX));
-  if(b<a){ const t=a; a=b; b=t; }
-  if(b-a < MINW){ b=Math.min(TMAX, a+MINW); a=Math.max(TMIN, b-MINW); }
-  REGION.r0=a; REGION.r1=b;
-  buildOverview();
-}
-function resetRegionCrop(){
-  if(REGION.r0===TMIN && REGION.r1===TMAX) return;
-  REGION.r0=TMIN; REGION.r1=TMAX;
-  buildOverview();
-}
 document.getElementById('q-apply').addEventListener('click', ()=>{
   const a=inputToMs(document.getElementById('q-start').value);
   const b=inputToMs(document.getElementById('q-end').value);
   if(a==null||b==null){ alert('Enter both a start and end date/time.'); return; }
-  if(document.getElementById('q-crop').checked) setRegionCrop(a, b);   // narrow the overview first...
-  applyRegion(a, b);                                                   // ...then the window fills whatever REGION now is
+  setRegion(a, b);
 });
 document.getElementById('q-reset').addEventListener('click', ()=>{
-  document.getElementById('q-crop').checked = false;
-  resetRegionCrop();
+  if(REGION.r0!==TMIN || REGION.r1!==TMAX){ REGION.r0=TMIN; REGION.r1=TMAX; buildOverview(); }
   applyRegion(TMIN, TMAX);
 });
 document.getElementById('q-width-apply').addEventListener('click', applyCustomWidth);
@@ -1120,10 +1113,18 @@ function applyViewSettingsObj(s){
     const sel=document.getElementById('ov-var'); if(sel) sel.value=OVVAR; }
   if(FOCUS && !VARS.includes(FOCUS)){ FOCUS=null; updateFocusNote(); }
   // the window/time range — jump straight back to the exact moment that was
-  // on screen when it was exported. A file that predates this (no t0/t1)
-  // just leaves the window where it is.
+  // on screen when it was captured. A file that predates this (no t0/t1)
+  // just leaves the window where it is. Goes through setRegion (the same
+  // thing "Set range" itself does), not the non-cropping applyRegion: if
+  // the overview is currently cropped to some OTHER, narrower span (from a
+  // "Set range" typed since), applyRegion's setSel would silently clamp the
+  // view's own saved window down to whatever fits inside that leftover crop
+  // — applying a view (or "Back to view", after you've since moved the
+  // window) would then look like it did nothing. setRegion re-crops the
+  // overview to the view's own span first, so its window is always fully
+  // honoured, cropped or not.
   if(s.t0!=null && s.t1!=null && isFinite(s.t0) && isFinite(s.t1)){
-    applyRegion(s.t0, s.t1);
+    setRegion(s.t0, s.t1);
   } else {
     buildOverview(); renderDetail();
   }
@@ -1194,6 +1195,13 @@ function applySelectedView(){
   vsNote(`switched to "${esc(s.name||('View '+(i+1)))}" — ${viewSummary(s)}`);
 }
 document.getElementById('vs-select').addEventListener('change', applySelectedView);
+// The dropdown's own 'change' event only fires when the SELECTED OPTION
+// changes — re-picking the option that's already showing (the normal way
+// you'd try to "go back" to a view after dragging the window away from it)
+// fires nothing at all, browser-native behaviour we can't change. "Back to
+// view" sidesteps that: it always reapplies whichever view is currently
+// picked, whether or not the dropdown's own selection actually changed.
+document.getElementById('vs-back').addEventListener('click', applySelectedView);
 document.getElementById('vs-remove').addEventListener('click', ()=>{
   const sel=document.getElementById('vs-select'); const i=sel.selectedIndex;
   if(i<0 || !VIEWS[i]) return;
@@ -1592,12 +1600,12 @@ function buildChart(win){
     parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${panelsBottom}" stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 3"/>`);
     parts.push(`<text x="${x}" y="${mTop-1}" text-anchor="middle" font-size="8" font-weight="bold" fill="#c0392b">${fmtHM(b[0])}</text>`);
     parts.push(`<rect class="burst-hit" x="${x-5}" y="${mTop}" width="10" height="${panelsBottom-mTop}" fill="transparent" style="cursor:pointer" data-cid="${b[2]||''}"><title>${b[1]} photos at ${fmtTime(b[0])} — click to see in chat</title></rect>`); }
-  // settings/data-change events: teal ticks along the top, plus a tick below the
-  // time/date axis that lines up with the titles listed below the chart —
-  // the axis (and this tick) sit below the modes block now, when there is one.
-  for(const e of win.events){ const x=xOfAny(e[0]);
-    parts.push(`<line x1="${x}" y1="${mTop}" x2="${x}" y2="${mTop+6}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`);
-    parts.push(`<line x1="${x}" y1="${axisBottom+30}" x2="${x}" y2="${axisBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.2"><title>${esc(e[1])} at ${fmtTime(e[0])}</title></line>`); }
+  // Events used to also get a per-event teal tick row here (top, right under
+  // #index, plus a matching one below the time axis) — removed: at a glance
+  // it read as just another alarm lane, not a distinct kind of marker. Events
+  // are still fully available below the chart in the Events box (searchable,
+  // click one to jump here) and, once picked, still shown on the chart via
+  // ev-pick-d below.
   parts.push(`<line id="ev-pick-d" x1="0" x2="0" y1="${mTop}" y2="${axisBottom+37}" stroke="${EVENT_COLOR}" stroke-width="1.4" stroke-dasharray="3 2" visibility="hidden"/>`);
   parts.push(`<line class="cx" id="cx-d" x1="0" x2="0" y1="${mTop}" y2="${axisBottom}" stroke="#111" stroke-width="0.8" visibility="hidden"/>`);
   svg.innerHTML = parts.join('');
@@ -1686,30 +1694,57 @@ function modeChipHTML(m, idx){   // m = [start, end, label, settings]; win.modes
 // renders every chip in the group — no cap, no "Show all" toggle; the
 // <details> section around each group (see ledgerSection) is what keeps a
 // window with hundreds of alarms/events from dumping a wall of chips by
-// default (collapse the section instead of hiding chips within it).
+// default (collapse the section instead of hiding chips within it). Each
+// group's chips also live in their own bounded, scrollable, resizable box
+// (see ledgerSection) with a text filter above it (see filterLedgerBox),
+// so a window with hundreds of entries stays a fixed-size, searchable list
+// instead of an ever-growing page.
 function chipsBlock(htmlArr){
   if(!htmlArr.length) return '';
   return `<div class="chips">${htmlArr.join('')}</div>`;
 }
 // Each of Alarms / Events / Mode changes is its own <details> section —
-// open by default, collapsible independently of the others.
-function ledgerSection(title, hint, count, bodyHtml){
+// open by default, collapsible independently of the others. Inside, a
+// filter input (filters chips by their visible text) sits above a
+// `.ledger-box`: a fixed-height, scrollable container with a native resize
+// handle (drag its bottom edge up/down) clamped by CSS min-height/max-height
+// so it can never be dragged down to nothing or up past a sane ceiling.
+function ledgerSection(title, hint, count, bodyHtml, boxId){
   return `<details class="ledger-sec" open><summary class="ledger-h">${title} — <b>${count}</b>`
-    + `${hint?` <span>· ${hint}</span>`:''}</summary>${bodyHtml}</details>`;
+    + `${hint?` <span>· ${hint}</span>`:''}</summary>`
+    + `<div class="ledger-filter"><input type="text" class="lf-input" placeholder="Filter ${esc(title.toLowerCase())}…"`
+    + ` oninput="filterLedgerBox('${boxId}', this.value)"><span class="lf-count" id="${boxId}-count"></span></div>`
+    + `<div class="ledger-box" id="${boxId}">${bodyHtml}</div></details>`;
+}
+// Hides/shows chips in a ledger box by a case-insensitive substring match
+// against each chip's own visible text (time, duration and name are all in
+// there already, so searching e.g. "apnea" or "14:0" both work), and updates
+// the "N / M shown" count next to the filter input. Called on every
+// keystroke (oninput) and once after each buildLedger() to seed that count.
+function filterLedgerBox(boxId, q){
+  const box=document.getElementById(boxId); if(!box) return;
+  const needle=q.trim().toLowerCase();
+  const chips=[...box.querySelectorAll('.chip')];
+  let shown=0;
+  chips.forEach(c=>{ const match = !needle || c.textContent.toLowerCase().includes(needle);
+    c.hidden = !match; if(match) shown++; });
+  const cnt=document.getElementById(boxId+'-count');
+  if(cnt) cnt.textContent = chips.length ? `${shown} / ${chips.length} shown` : '';
 }
 function buildLedger(win){
   const host=document.getElementById('ledger-d'); if(!host) return;
   const alBody = win.alarms.length ? chipsBlock(win.alarms.map(a=>alarmChipHTML(a)))
                                     : `<div class="chips"><span class="muted">no alarms in this window</span></div>`;
-  let h = ledgerSection('Alarms', 'click one to jump to it', win.alarms.length, alBody);
+  let h = ledgerSection('Alarms', 'click one to jump to it', win.alarms.length, alBody, 'led-al');
   const evBody = win.events.length ? chipsBlock(win.events.map((e,i)=>chipHTML(e[0], e[1], 'ev', i)))
                                     : `<div class="chips"><span class="muted">no logged events in this window</span></div>`;
-  h += ledgerSection('Events', 'click a title to jump the cursor there · ⓘ for full settings · text is selectable', win.events.length, evBody);
+  h += ledgerSection('Events', 'click a title to jump the cursor there · ⓘ for full settings · text is selectable', win.events.length, evBody, 'led-ev');
   if(win.modes.length){
     const moBody = chipsBlock(win.modes.map((m,i)=>modeChipHTML(m, i)));
-    h += ledgerSection('Mode changes', 'ⓘ for full settings', win.modes.length, moBody);
+    h += ledgerSection('Mode changes', 'ⓘ for full settings', win.modes.length, moBody, 'led-mo');
   }
   host.innerHTML = h;
+  ['led-al','led-ev','led-mo'].forEach(id=>filterLedgerBox(id, ''));
 }
 // ============ mode/event detail popup (settings, alarms, current behaviour) ============
 // Every Log-CSV row's snapshot (`settings`, from alarms.py's `_row_settings`)

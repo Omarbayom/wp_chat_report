@@ -96,10 +96,10 @@ ALARM_COLORS = {
     "High FIO2 Concentration":           "#8e44ad",
     "O2 Sensor Fault":                   "#6a0dad",
     # minute / tidal volume
-    "Low Mve":                           "#469990",
+    "Low MVe":                           "#469990",
     "High MVe":                          "#1abc9c",
-    "Low Mvi":                           "#16a085",
-    "High Mvi":                          "#0e8f77",
+    "Low MVi":                           "#16a085",
+    "High MVi":                          "#0e8f77",
     "Tidal Volume not Achieved":         "#bfa100",
     "Tidal Volume Exceeded":             "#daa520",
     # sensor faults
