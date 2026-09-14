@@ -18,3 +18,8 @@ extract_*/
 *.rar
 *.csv
 *.html
+
+# PyInstaller build output (run build_exe.ps1 to regenerate)
+/build/
+/dist/
+*.spec
