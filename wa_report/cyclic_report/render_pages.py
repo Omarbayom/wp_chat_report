@@ -458,6 +458,7 @@ _CHARTS_PAGE = r"""<!DOCTYPE html>
   .controls select, .controls button { font:inherit; font-size:13px; padding:6px 10px; border-radius:6px; border:1px solid #cfd8e3; background:#fff; cursor:pointer; }
   .controls button.primary { background:#0a6ebd; color:#fff; border-color:#0a6ebd; }
   .controls button:hover { border-color:#0a6ebd; }
+  .controls .q-crop-lbl { display:flex; align-items:center; gap:5px; font-size:12px; color:#5b6b7b; padding-bottom:6px; cursor:pointer; }
   .controls .span { font-size:12px; color:#1d2733; margin-left:auto; text-align:right; line-height:1.4; }
   .controls .span b { color:#0a6ebd; }
   .varbar { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
@@ -623,6 +624,9 @@ __NOTES__
   </label>
   <button class="primary" id="q-apply">Set range</button>
   <button id="q-reset">Full range</button>
+  <label class="q-crop-lbl" title="When checked, 'Set range' also crops the overview strip itself to this span (hiding data outside it), instead of just moving the window inside the full-length overview">
+    <input type="checkbox" id="q-crop"> Crop overview to range
+  </label>
   <label class="q">Window width
     <select id="q-width" onchange="setWidthHours(+this.value)">
       <option value="1">1 hour</option>
@@ -784,12 +788,15 @@ const OV_L = 70, OV_R = VB_W - 16, OV_TOP = 10, OV_CH = 150, OV_GAP = 8, OV_LANE
 
 const TMIN = DATA.tMin, TMAX = DATA.tMax;                // full data bounds
 const MINW = 60000;                                     // smallest window = 1 minute
-// ONE moving thing: the overview always shows the WHOLE log (REGION is just
-// that fixed backdrop, permanently [TMIN,TMAX] — there is no separate "zoom"
-// step any more). SEL is the single draggable/resizable window inside it; the
-// detail chart shows SEL. REGION is kept only so ovX/ovT/regSpan (and the
-// alarm-only-window fallback axis) don't need a second code path — it never
-// changes after this.
+// By default the overview shows the WHOLE log (REGION == [TMIN,TMAX]) and SEL
+// is just the single draggable/resizable window inside it — the detail chart
+// shows SEL, nothing crops the overview itself. The "Crop overview to range"
+// checkbox next to "Set range" brings back the older behaviour where REGION
+// itself narrows to the typed span (see setRegionCrop/resetRegionCrop below):
+// the overview strip is redrawn to only that span, so data outside it is
+// genuinely hidden, not just scrolled past — and since SEL always fills the
+// current REGION right after "Set range", the window brush fills the whole
+// (now-narrower) overview, matching what "Full range" restores.
 const REGION = { r0: TMIN, r1: TMAX };
 let SEL = { t0: TMIN, t1: TMIN };
 const CTRL = { locked:false };
@@ -835,9 +842,11 @@ function onVarToggle(){
 }
 
 // ============================ OVERVIEW (timeline) ============================
-// The overview always spans the whole log (REGION, frozen at [TMIN,TMAX]); a
-// draggable/resizable window (SEL) inside it picks the detail sub-range —
-// the only thing that moves. Axis ticks span the whole log.
+// The overview spans REGION (by default the whole log, [TMIN,TMAX]) with a
+// draggable/resizable window (SEL) inside it picking the detail sub-range.
+// REGION only narrows when "Crop overview to range" is used (setRegionCrop);
+// otherwise it never changes and SEL is the only thing that moves. Axis
+// ticks always span REGION, whatever it currently is.
 function ovX(t){ return OV_L + (t-REGION.r0)/regSpan()*(OV_R-OV_L); }
 function ovT(x){ return REGION.r0 + (x-OV_L)/(OV_R-OV_L)*regSpan(); }
 function inRegion(t){ return t>=REGION.r0 && t<=REGION.r1; }
@@ -968,11 +977,15 @@ function updateBrushRects(){
 })();
 
 // ============================ window (brush) state ============================
-// SEL is the ONE draggable/resizable thing on the overview — the overview
-// itself always shows the whole log (REGION is frozen full-extent, see
-// above), so there's nothing else on screen that could look "stuck": if SEL
-// ever equalled the full width it would have no room to slide, which is the
-// "window isn't moving" bug this replaces. setSel also mirrors the window's
+// SEL is the ONE draggable/resizable thing on the overview. By default the
+// overview itself always shows the whole log (REGION == [TMIN,TMAX]), so
+// there's nothing else on screen that could look "stuck": if SEL ever
+// equalled the full width with no way to crop the overview too, it would
+// have no room to slide, which is the "window isn't moving" bug this
+// replaced. If "Crop overview to range" narrows REGION, SEL again fills the
+// full (now-narrower) width right after — that's intended there: the
+// overview itself has been resized to match, not left stuck. setSel also
+// mirrors the window's
 // bounds into the Range start/end fields, so typing exact times and reading
 // back the current window use the same two fields.
 function setSel(t0, t1, skipDetail){
@@ -1016,22 +1029,47 @@ function gotoAlarm(dir){
 // ============================ typed-time window controls ============================
 // "Set range" / "Full range" (and the cross-tab ?from&to deep link, and the
 // Patients tab's "Open charts for this patient" link) all just move/resize
-// the ONE window now — the function name `applyRegion` is kept because it's
-// part of the exported cross-tab API (window.PAGES.charts), not because
-// there's still a region to apply.
+// the ONE window by default — the function name `applyRegion` is kept
+// because it's part of the exported cross-tab API (window.PAGES.charts), not
+// because there's still a region to apply there. Those programmatic callers
+// deliberately never crop: jumping to a moment from another tab should keep
+// the full log visible for context. Only the on-page "Crop overview to
+// range" checkbox (q-crop), read directly by the q-apply/q-reset button
+// handlers below, opts into narrowing REGION itself — see setRegionCrop.
 function applyRegion(a, b){
   a=Math.max(TMIN, Math.min(a, TMAX)); b=Math.max(TMIN, Math.min(b, TMAX));
   if(b<a){ const t=a; a=b; b=t; }
   if(b-a < MINW){ b=Math.min(TMAX, a+MINW); a=Math.max(TMIN, b-MINW); }
   setSel(a, b);
 }
+// Narrows REGION itself to [a,b] and redraws the overview strip to match, so
+// data outside the typed range is genuinely hidden (not just scrolled past)
+// — the pre-existing older behaviour, opt-in via the "Crop overview to
+// range" checkbox. Bounds/min-width logic mirrors applyRegion.
+function setRegionCrop(a, b){
+  a=Math.max(TMIN, Math.min(a, TMAX)); b=Math.max(TMIN, Math.min(b, TMAX));
+  if(b<a){ const t=a; a=b; b=t; }
+  if(b-a < MINW){ b=Math.min(TMAX, a+MINW); a=Math.max(TMIN, b-MINW); }
+  REGION.r0=a; REGION.r1=b;
+  buildOverview();
+}
+function resetRegionCrop(){
+  if(REGION.r0===TMIN && REGION.r1===TMAX) return;
+  REGION.r0=TMIN; REGION.r1=TMAX;
+  buildOverview();
+}
 document.getElementById('q-apply').addEventListener('click', ()=>{
   const a=inputToMs(document.getElementById('q-start').value);
   const b=inputToMs(document.getElementById('q-end').value);
   if(a==null||b==null){ alert('Enter both a start and end date/time.'); return; }
-  applyRegion(a, b);
+  if(document.getElementById('q-crop').checked) setRegionCrop(a, b);   // narrow the overview first...
+  applyRegion(a, b);                                                   // ...then the window fills whatever REGION now is
 });
-document.getElementById('q-reset').addEventListener('click', ()=>applyRegion(TMIN, TMAX));
+document.getElementById('q-reset').addEventListener('click', ()=>{
+  document.getElementById('q-crop').checked = false;
+  resetRegionCrop();
+  applyRegion(TMIN, TMAX);
+});
 document.getElementById('q-width-apply').addEventListener('click', applyCustomWidth);
 document.getElementById('q-width-n').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyCustomWidth(); } });
 document.getElementById('al-prev').addEventListener('click', ()=>gotoAlarm(-1));
