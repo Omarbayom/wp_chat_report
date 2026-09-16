@@ -126,11 +126,26 @@ def parse_datetimes(
     docs/date-order note). A forced order applies uniformly, skipping the
     auto-detection entirely; ISO-looking data is unaffected either way since
     the order there was never ambiguous.
+
+    A forced order isn't trusted blindly, though: a genuinely wrong pick
+    doesn't just misdate rows, it also fails to parse outright any row whose
+    day-of-month is > 12 (e.g. "13/1" isn't a valid month-first date at all)
+    — and a real device export is otherwise clean, so a sizeable chunk of
+    unparseable rows means the chosen order doesn't fit *this* file, not that
+    a bunch of rows are individually bad. Silently handing back a dataset
+    with pieces of it missing would be worse than the guess we're trying to
+    avoid, so a forced order that fails badly is abandoned in favour of the
+    auto-detection below instead.
     """
     if force is not None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            return pd.to_datetime(s, errors="coerce", dayfirst=force)
+            forced = pd.to_datetime(s, errors="coerce", dayfirst=force)
+        total = s.notna().sum()
+        if total == 0 or forced.notna().sum() >= total * 0.9:
+            return forced
+        # else: the forced order parsed <90% of the rows — treat it as the
+        # wrong order for this file and fall through to auto-detection below.
 
     sample = s.dropna().astype(str).head(20)
     looks_iso = len(sample) > 0 and sample.str.match(_ISO_RE).mean() > 0.5
