@@ -97,22 +97,24 @@ def assemble_roster(preamble, add_ms, sample_ms, alarm_ms, t_min, t_max,
     return out
 
 
-def build_roster(cyclic_source, alarms_source=None) -> List[dict]:
+def build_roster(cyclic_source, alarms_source=None, date_order: "bool | None" = None) -> List[dict]:
     """The roster straight from a cyclic CSV (+ optional Log). Light I/O — parses
-    the cyclic timestamps and the log, but never touches any chat."""
-    preamble = load_patient_info(cyclic_source)
-    add_ms = [_ms(t) for t in load_patient_add_events(alarms_source)]
+    the cyclic timestamps and the log, but never touches any chat. *date_order*:
+    ``None`` auto-detects each file's day/month order; ``True``/``False`` forces
+    day-first/month-first everywhere below, for a source known to be ambiguous."""
+    preamble = load_patient_info(cyclic_source, date_order)
+    add_ms = [_ms(t) for t in load_patient_add_events(alarms_source, date_order)]
     try:
-        df, _ = load_cyclic(cyclic_source, list(VARIABLE_UNITS.keys()))
+        df, _ = load_cyclic(cyclic_source, list(VARIABLE_UNITS.keys()), date_order)
         sample_ms = sorted(_ms(t) for t in df["DateTime"])
     except Exception:
         sample_ms = []
-    alarms = load_alarms(alarms_source) if alarms_source is not None else None
+    alarms = load_alarms(alarms_source, date_order) if alarms_source is not None else None
     alarm_ms = (sorted(_ms(t) for t in alarms["DateTime"])
                 if alarms is not None and not alarms.empty else [])
     # beginning of the logs = the earliest log row of ANY kind (alarms + events,
     # where events already include the "Add New Patient" rows)
-    events = load_log_events(alarms_source) if alarms_source is not None else None
+    events = load_log_events(alarms_source, date_order) if alarms_source is not None else None
     event_ms = (sorted(_ms(t) for t in events["DateTime"])
                 if events is not None and not events.empty else [])
     log_ms = alarm_ms + event_ms

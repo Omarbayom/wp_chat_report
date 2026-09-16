@@ -41,8 +41,14 @@ def _ms(dt) -> int:
 
 def build_payload(folders, cyclic_source, variables: Sequence[str],
                   alarms_source=None, min_photos: int = 3,
-                  window_minutes: int = 10):
+                  window_minutes: int = 10, date_order: "bool | None" = None):
     """Shared data payload for both interactive chart pages.
+
+    *date_order*: ``None`` (default) auto-detects each CSV's day/month order
+    per-file (see ``csv_io.parse_datetimes``); ``True``/``False`` forces
+    day-first/month-first everywhere below, for a source known to export
+    ambiguous (non-ISO) dates that the auto-detection can't reliably call —
+    e.g. a short log that never crosses a calendar day boundary.
 
     Loads **every** configurable variable that exists in the CSV (so the page can
     let the user toggle any of them on the Y axis client-side), plus the alarm
@@ -63,16 +69,16 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
     ``meta`` (for the page's stat bar / notes): counts + spans.
     """
     all_vars = list(VARIABLE_UNITS.keys())
-    df, missing = load_cyclic(cyclic_source, all_vars)
+    df, missing = load_cyclic(cyclic_source, all_vars, date_order)
     present = [v for v in all_vars if v not in missing]
     default_sel = [v for v in (list(variables) or DEFAULT_VARIABLES) if v in present]
     if not default_sel:
         default_sel = present[:3]
 
-    alarms = load_alarm_intervals(alarms_source)   # Activated→Deactivated intervals
-    cyclic_modes = load_modes(cyclic_source)       # mode changes seen in the cyclic CSV
-    log_entries = load_log_entries(alarms_source)  # non-alarm Log rows: mode | event, + settings
-    limits = load_alarm_limits(alarms_source)      # alarm-limit setting changes
+    alarms = load_alarm_intervals(alarms_source, date_order)   # Activated→Deactivated intervals
+    cyclic_modes = load_modes(cyclic_source, date_order)       # mode changes seen in the cyclic CSV
+    log_entries = load_log_entries(alarms_source, date_order)  # non-alarm Log rows: mode | event, + settings
+    limits = load_alarm_limits(alarms_source, date_order)      # alarm-limit setting changes
     # The chat is optional: with no folders there are simply no photo bursts.
     img_times = []
     if folders:
@@ -164,8 +170,8 @@ def build_payload(folders, cyclic_source, variables: Sequence[str],
 
     # Per-patient roster: split the log at each "Add New Patient" handover. The
     # last segment is the current patient (preamble); earlier ones get b1/b2/…
-    patient_pairs = load_patient_info(cyclic_source)
-    add_ms = [_ms(t) for t in load_patient_add_events(alarms_source)]
+    patient_pairs = load_patient_info(cyclic_source, date_order)
+    add_ms = [_ms(t) for t in load_patient_add_events(alarms_source, date_order)]
     patients = assemble_roster(patient_pairs, add_ms, list(dts),
                                [a[0] for a in alarms_flat], t_min, t_max)
 

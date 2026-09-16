@@ -193,6 +193,24 @@ with st.form("main_form"):
             buffer_minutes = st.number_input(
                 "Boundary buffer minutes (daily/hourly)", 0, 60, 5)
 
+        date_order_choice = st.selectbox(
+            "CSV date order (cyclic + alarm logs)",
+            options=["Auto-detect (default)", "Day first (31/12/2026)", "Month first (12/31/2026)"],
+            index=0,
+            help="Only matters for CSVs with ambiguous slash-style dates — ISO "
+            "dates ('2026-07-28 11:42:59') are never ambiguous and ignore this "
+            "entirely. Auto-detect gets it right almost always, but it works from "
+            "a sample and has no way to tell for a short log that never crosses a "
+            "calendar day boundary (every timestamp same day/month either way). "
+            "If a generated report's dates look wrong — or you already know "
+            "which format the exporting PC uses — pick it explicitly here.",
+        )
+        date_order = {
+            "Auto-detect (default)": None,
+            "Day first (31/12/2026)": True,
+            "Month first (12/31/2026)": False,
+        }[date_order_choice]
+
     submitted = st.form_submit_button("Generate", type="primary")
 
 if submitted:
@@ -228,6 +246,7 @@ if submitted:
                         window_hours=int(window_hours),
                         max_img_dim=int(max_dim), mode=mode,
                         buffer_minutes=int(buffer_minutes),
+                        date_order=date_order,
                     )
 
                 # 2) Word report (and, only when there's no cyclic data, a
