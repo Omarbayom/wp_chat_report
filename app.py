@@ -151,6 +151,26 @@ with st.form("main_form"):
         type=["csv"], accept_multiple_files=True, key="m_alarm",
     )
 
+    date_order_choice = st.selectbox(
+        "CSV date order (cyclic + alarm logs)",
+        options=["Month first (12/31/2026) — default", "Day first (31/12/2026)", "Auto-detect"],
+        index=0,
+        help="Controls how ambiguous slash-style dates (e.g. '7/5/2026') in the "
+        "CSVs above are read — ISO dates ('2026-07-28 11:42:59') are never "
+        "ambiguous and are read correctly regardless of this setting. Defaults "
+        "to **month-first** because every ambiguous export actually seen from "
+        "these devices has used that order (day-first has never been seen — if "
+        "you know a specific PC/export uses it, switch to Day first). Auto-detect "
+        "is still offered as a fallback, but it works from a per-file sample and "
+        "has no way to tell for a short log that never crosses a calendar day "
+        "boundary — the month-first default is the safer bet there.",
+    )
+    date_order = {
+        "Month first (12/31/2026) — default": False,
+        "Day first (31/12/2026)": True,
+        "Auto-detect": None,
+    }[date_order_choice]
+
     c1, c2 = st.columns(2)
     with c1:
         hospital = st.text_input("Hospital name (optional)", value="")
@@ -192,24 +212,6 @@ with st.form("main_form"):
         with b2:
             buffer_minutes = st.number_input(
                 "Boundary buffer minutes (daily/hourly)", 0, 60, 5)
-
-        date_order_choice = st.selectbox(
-            "CSV date order (cyclic + alarm logs)",
-            options=["Auto-detect (default)", "Day first (31/12/2026)", "Month first (12/31/2026)"],
-            index=0,
-            help="Only matters for CSVs with ambiguous slash-style dates — ISO "
-            "dates ('2026-07-28 11:42:59') are never ambiguous and ignore this "
-            "entirely. Auto-detect gets it right almost always, but it works from "
-            "a sample and has no way to tell for a short log that never crosses a "
-            "calendar day boundary (every timestamp same day/month either way). "
-            "If a generated report's dates look wrong — or you already know "
-            "which format the exporting PC uses — pick it explicitly here.",
-        )
-        date_order = {
-            "Auto-detect (default)": None,
-            "Day first (31/12/2026)": True,
-            "Month first (12/31/2026)": False,
-        }[date_order_choice]
 
     submitted = st.form_submit_button("Generate", type="primary")
 
