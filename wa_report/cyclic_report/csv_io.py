@@ -98,7 +98,9 @@ def read_ventilator_csv(source, key_col: str) -> pd.DataFrame:
 _ISO_RE = re.compile(r"^\s*\d{4}-\d{1,2}-\d{1,2}")
 
 
-def parse_datetimes(s: "pd.Series", dayfirst: bool = True) -> "pd.Series":
+def parse_datetimes(
+    s: "pd.Series", dayfirst: bool = True, force: "bool | None" = None
+) -> "pd.Series":
     """Parse a timestamp column, auto-recovering the day/month order.
 
     ISO timestamps (``YYYY-MM-DD HH:MM:SS``) have an unambiguous day/month order,
@@ -115,7 +117,21 @@ def parse_datetimes(s: "pd.Series", dayfirst: bool = True) -> "pd.Series":
     plausible span — the wrong order silently scatters what should be a short
     window across months, which is exactly the tell. Handles ISO, ``DD/MM/YYYY``
     and ``MM/DD/YYYY`` exports transparently.
+
+    *force*, when not ``None``, is the user explicitly telling us the order
+    (True = day-first, False = month-first) instead of leaving it to the
+    heuristic above — every check in this function is a best-effort guess from
+    a sample, and some real files (e.g. a log that never crosses a calendar
+    day) carry no signal at all that could disambiguate it (see the
+    docs/date-order note). A forced order applies uniformly, skipping the
+    auto-detection entirely; ISO-looking data is unaffected either way since
+    the order there was never ambiguous.
     """
+    if force is not None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            return pd.to_datetime(s, errors="coerce", dayfirst=force)
+
     sample = s.dropna().astype(str).head(20)
     looks_iso = len(sample) > 0 and sample.str.match(_ISO_RE).mean() > 0.5
     if looks_iso:

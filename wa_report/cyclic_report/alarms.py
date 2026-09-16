@@ -22,12 +22,14 @@ from .csv_io import parse_datetimes, read_ventilator_csv
 _LIMIT_SUFFIX = re.compile(r"\s+(Min|Max)$")
 
 
-def load_alarms(source) -> pd.DataFrame:
+def load_alarms(source, date_order: "bool | None" = None) -> pd.DataFrame:
     """Read an alarm Log CSV (path or file-like) -> DataFrame[DateTime, Alarm].
 
     Keeps only alarms present in ``ALARM_COLORS`` and sorts by time. Returns an
     empty (but correctly-typed) frame when *source* is falsy or has no usable
-    rows, so callers can treat "no alarms" uniformly.
+    rows, so callers can treat "no alarms" uniformly. *date_order*: ``None``
+    auto-detects (the default); ``True``/``False`` forces day-first/month-first
+    for an ambiguous (non-ISO) ``Date`` column — see ``csv_io.parse_datetimes``.
     """
     empty = pd.DataFrame({"DateTime": pd.to_datetime([]), "Alarm": pd.Series([], dtype="object")})
     if source is None:
@@ -40,7 +42,7 @@ def load_alarms(source) -> pd.DataFrame:
             f"Columns found: {', '.join(map(str, df.columns[:8]))}…"
         )
 
-    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False, force=date_order)
     df = df.dropna(subset=["DateTime"])
     df = df[df["Alarm"].isin(ALARM_COLORS)]
     if df.empty:
@@ -52,7 +54,7 @@ def load_alarms(source) -> pd.DataFrame:
     )
 
 
-def load_alarm_intervals(source) -> pd.DataFrame:
+def load_alarm_intervals(source, date_order: "bool | None" = None) -> pd.DataFrame:
     """Pair each alarm's **Activated → Deactivated** rows into active intervals.
 
     The device logs an alarm as two rows sharing the same ``Alarm`` name with a
@@ -77,7 +79,7 @@ def load_alarm_intervals(source) -> pd.DataFrame:
     df = read_ventilator_csv(source, "Alarm")
     if "Alarm" not in df.columns or "Date" not in df.columns:
         return empty
-    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False, force=date_order)
     # stable sort so same-second rows keep their in-file order — deterministic
     # even when several log files are stitched together (multi-file upload)
     df = df.dropna(subset=["DateTime"]).sort_values("DateTime", kind="stable")
@@ -123,7 +125,7 @@ def load_alarm_intervals(source) -> pd.DataFrame:
     )
 
 
-def load_log_events(source) -> pd.DataFrame:
+def load_log_events(source, date_order: "bool | None" = None) -> pd.DataFrame:
     """Read the Log CSV and keep the **non-alarm** rows as events.
 
     The device logs mode/settings/service actions in the same ``Alarm`` column
@@ -137,7 +139,7 @@ def load_log_events(source) -> pd.DataFrame:
     df = read_ventilator_csv(source, "Alarm")
     if "Alarm" not in df.columns or "Date" not in df.columns:
         return empty
-    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False, force=date_order)
     df = df.dropna(subset=["DateTime"])
     df = df[~df["Alarm"].isin(ALARM_COLORS)]
     df = df[df["Alarm"].astype(str).str.strip() != ""]
@@ -183,7 +185,7 @@ def _row_settings(row: "pd.Series") -> dict:
     return out
 
 
-def load_log_entries(source) -> pd.DataFrame:
+def load_log_entries(source, date_order: "bool | None" = None) -> pd.DataFrame:
     """Every **non-alarm** Log row, classified as a *mode* or a plain
     *event*, each carrying a settings snapshot.
 
@@ -226,7 +228,7 @@ def load_log_entries(source) -> pd.DataFrame:
     df = read_ventilator_csv(source, "Alarm")
     if "Alarm" not in df.columns or "Date" not in df.columns:
         return empty
-    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False, force=date_order)
     df = df.dropna(subset=["DateTime"])
     df = df[~df["Alarm"].isin(ALARM_COLORS)]
     text = df["Alarm"].astype(str).str.strip()
@@ -241,7 +243,9 @@ def load_log_entries(source) -> pd.DataFrame:
     return out.sort_values("DateTime", kind="stable").reset_index(drop=True)
 
 
-def load_alarm_limits(source) -> List[Tuple["pd.Timestamp", Dict[str, list]]]:
+def load_alarm_limits(
+    source, date_order: "bool | None" = None
+) -> List[Tuple["pd.Timestamp", Dict[str, list]]]:
     """Alarm-limit snapshots from the Log CSV's ``"<Var> Min"``/``"<Var> Max"``
     columns (e.g. ``"PIP Max"``, ``"PEEP Min"``, ``"PEEP Max"``, ``"RR Min"``,
     ``"RR Max"``, ``"MVe Min"``, ``"MVe Max"``, ``"ApneaTime Max"`` — whichever
@@ -274,7 +278,7 @@ def load_alarm_limits(source) -> List[Tuple["pd.Timestamp", Dict[str, list]]]:
     df = df[mask]
     if df.empty:
         return []
-    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False, force=date_order)
     df = df.dropna(subset=["DateTime"]).sort_values("DateTime", kind="stable")
     if df.empty:
         return []
@@ -298,7 +302,7 @@ def load_alarm_limits(source) -> List[Tuple["pd.Timestamp", Dict[str, list]]]:
     return out
 
 
-def load_patient_add_events(source) -> List["pd.Timestamp"]:
+def load_patient_add_events(source, date_order: "bool | None" = None) -> List["pd.Timestamp"]:
     """Times of the device's **"Add New Patient"** log rows — each marks a patient
     handover, so they split a reused device's log into per-patient segments.
 
@@ -310,7 +314,7 @@ def load_patient_add_events(source) -> List["pd.Timestamp"]:
     df = read_ventilator_csv(source, "Alarm")
     if "Alarm" not in df.columns or "Date" not in df.columns:
         return []
-    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False)
+    df["DateTime"] = parse_datetimes(df["Date"], dayfirst=False, force=date_order)
     df = df.dropna(subset=["DateTime"])
     mask = df["Alarm"].astype(str).str.strip().str.lower() == "add new patient"
     return sorted(df.loc[mask, "DateTime"].tolist())

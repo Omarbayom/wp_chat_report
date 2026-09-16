@@ -37,33 +37,36 @@ def _esc(s) -> str:
     return _html.escape(str(s if s is not None else ""), quote=True)
 
 
-def _latest_time(source):
+def _latest_time(source, date_order: "bool | None" = None):
     """The latest ``DateTime`` in one cyclic source, or ``None`` if unreadable."""
     try:
         d = read_ventilator_csv(source, "DateTime")
         if "DateTime" not in d.columns:
             return None
-        t = parse_datetimes(d["DateTime"], dayfirst=True).max()
+        t = parse_datetimes(d["DateTime"], dayfirst=True, force=date_order).max()
         return None if t is None or t != t else t   # drop NaT
     except Exception:
         return None
 
 
-def load_patient_info(source) -> Pairs:
+def load_patient_info(source, date_order: "bool | None" = None) -> Pairs:
     """Read the CyclicData preamble and return the patient fields present, as
     ordered ``(label, value)`` pairs. Empty list when the source can't be read or
     carries no patient rows (so callers can treat "no patient info" uniformly).
 
     When *source* is a **list** of cyclic files, the preamble of the file whose
     data ends **latest** is returned — that is the current patient (matching how
-    the roster picks the last time-segment)."""
+    the roster picks the last time-segment). *date_order*: ``None`` auto-detects;
+    ``True``/``False`` forces day-first/month-first (only affects the list case,
+    which needs to parse dates to compare files — a single source's own patient
+    fields are read as plain text, no date parsing involved)."""
     if isinstance(source, (list, tuple)):
         best, best_t = [], None
         for s in source:
-            info = load_patient_info(s)
+            info = load_patient_info(s, date_order)
             if not info:
                 continue
-            t = _latest_time(s)
+            t = _latest_time(s, date_order)
             if not best or (t is not None and (best_t is None or t > best_t)):
                 best, best_t = info, t
         return best

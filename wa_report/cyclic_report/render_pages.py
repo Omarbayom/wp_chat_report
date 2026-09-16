@@ -60,17 +60,23 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
                       device_label: str = "", alarms_source=None,
                       chat_href: str = "report.html", min_photos: int = 3,
                       window_minutes: int = 10, window_hours: int = 12,
-                      patient_href: str = "", out_path: Optional[Path] = None) -> str:
+                      patient_href: str = "", out_path: Optional[Path] = None,
+                      date_order: Optional[bool] = None) -> str:
     """Interactive charts page. The whole cyclic log is embedded and shown; the
     user drags a window over a compressed overview (or types a start/end time, or
     steps through alarms) to zoom the detail chart, and picks any variables on the
     Y axis. Burst markers open *chat_href* at the matching image; a ``?t=<ms>``
-    query on load centres the window on that moment and locks it."""
+    query on load centres the window on that moment and locks it.
+
+    *date_order*: ``None`` (default) auto-detects each CSV's day/month order;
+    ``True``/``False`` forces day-first/month-first when it's known ahead of
+    time and can't be reliably auto-detected (see ``csv_io.parse_datetimes``)."""
     variables = list(variables) or list(DEFAULT_VARIABLES)
     payload, meta = build_payload(folders, cyclic_source, variables,
                                   alarms_source=alarms_source,
                                   min_photos=min_photos,
-                                  window_minutes=window_minutes)
+                                  window_minutes=window_minutes,
+                                  date_order=date_order)
     payload["initialHours"] = window_hours if window_hours > 0 else 12
     # The patient banner is rendered client-side from payload["patients"] so it
     # follows the current view (which patient's segment you're looking at).
@@ -241,9 +247,13 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
                              device_label: str = "", alarms_source=None,
                              chat_href: str = "", min_photos: int = 3,
                              window_minutes: int = 10, window_hours: int = 12,
-                             out_path: Optional[Path] = None) -> str:
+                             out_path: Optional[Path] = None,
+                             date_order: Optional[bool] = None) -> str:
     """One self-contained HTML file combining the Timeline (Charts) / Patients
     views as in-page tabs — see the module-level note above for why.
+    *date_order*: ``None`` auto-detects; ``True``/``False`` forces
+    day-first/month-first for a source known to be ambiguous (see
+    ``csv_io.parse_datetimes``).
     *chat_href*, when given, stays a **separate** linked file: its nav buttons
     and each photo-burst's 📈 link point at this file with ``?tab=``/``?t=``/
     ``?from&to``, which the init script below turns into the right tab +
@@ -261,7 +271,7 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
     at the Windowed one, which read as "the shortcut doesn't work" whenever
     you'd switched tabs.)
     """
-    roster = build_roster(cyclic_source, alarms_source)
+    roster = build_roster(cyclic_source, alarms_source, date_order)
     device_label = device_label or (roster[-1]["label"] if roster else "")
     has_patients = bool(roster)
 
@@ -270,7 +280,8 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
         alarms_source=alarms_source, chat_href=chat_href,
         min_photos=min_photos,
         window_minutes=window_minutes, window_hours=window_hours,
-        patient_href="#tab-patients" if has_patients else "")
+        patient_href="#tab-patients" if has_patients else "",
+        date_order=date_order)
 
     c_style, c_body, c_data, c_script = _page_fragment(charts_doc, "c")
     # expose the deep-link entry points the cross-tab handler needs
@@ -370,8 +381,15 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
                        alarms_source=None, min_photos: int = 3,
                        window_minutes: int = 10, window_hours: int = 12,
                        max_img_dim: int = 480, mode: str = "hourly",
-                       buffer_minutes: int = 0):
+                       buffer_minutes: int = 0,
+                       date_order: Optional[bool] = None):
     """Return a dict of interactive pages:
+
+    *date_order*: ``None`` (default) auto-detects each CSV's day/month order
+    per-file; ``True``/``False`` forces day-first/month-first everywhere —
+    for when the uploader knows their export's format and the auto-detection
+    can't reliably tell (e.g. a short log that never crosses a calendar day;
+    see ``csv_io.parse_datetimes`` for exactly when that happens).
 
       * ``report.html``  — the chat report (1-hour sections, 24-hour times),
         only when a WhatsApp export was uploaded.
@@ -393,7 +411,7 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
     # Per-patient roster from the cyclic CSV + log ("Add New Patient" handovers).
     # Drives the Patients tab, the banners, and a blank report title. The current
     # (last) patient supplies the label; earlier patients are b1/b2/…
-    roster = build_roster(cyclic_source, alarms_source)
+    roster = build_roster(cyclic_source, alarms_source, date_order)
     device_label = device_label or (roster[-1]["label"] if roster else "")
 
     result = {}
@@ -421,7 +439,7 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
         folders, cyclic_source, variables, device_label=device_label,
         alarms_source=alarms_source, chat_href=chat_href,
         min_photos=min_photos, window_minutes=window_minutes,
-        window_hours=window_hours,
+        window_hours=window_hours, date_order=date_order,
     )
     return result
 

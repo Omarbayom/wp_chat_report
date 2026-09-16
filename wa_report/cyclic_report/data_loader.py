@@ -17,18 +17,19 @@ from .csv_io import parse_datetimes, read_ventilator_csv
 _TAG = re.compile(r"<[^>]+>")
 
 
-def load_modes(source) -> List[Tuple["pd.Timestamp", str]]:
+def load_modes(source, date_order: "bool | None" = None) -> List[Tuple["pd.Timestamp", str]]:
     """Ventilation-mode change points from the cyclic CSV's ``ModeName`` column.
 
     Returns ``[(datetime, mode_name), …]`` with one entry each time the mode
     changes (so a run of the same mode collapses to its first sample). HTML tags
     in the device's mode names (e.g. ``HF O<sub>2</sub> Therapy``) are stripped.
-    Empty list if the column is absent.
+    Empty list if the column is absent. *date_order*: ``None`` auto-detects;
+    ``True``/``False`` forces day-first/month-first.
     """
     df = read_ventilator_csv(source, "DateTime")
     if "ModeName" not in df.columns or "DateTime" not in df.columns:
         return []
-    dt = parse_datetimes(df["DateTime"], dayfirst=True)
+    dt = parse_datetimes(df["DateTime"], dayfirst=True, force=date_order)
     names = df["ModeName"].astype(str).map(lambda s: _TAG.sub("", s).strip() if isinstance(s, str) else s)
     d = pd.DataFrame({"dt": dt, "m": names}).dropna(subset=["dt"])
     d = d[(d["m"] != "") & (d["m"].str.lower() != "nan")].sort_values("dt")
@@ -41,14 +42,17 @@ def load_modes(source) -> List[Tuple["pd.Timestamp", str]]:
     return out
 
 
-def load_cyclic(source, variables: Sequence[str]) -> Tuple[pd.DataFrame, List[str]]:
+def load_cyclic(
+    source, variables: Sequence[str], date_order: "bool | None" = None
+) -> Tuple[pd.DataFrame, List[str]]:
     """Read a cyclic CSV (path or file-like) and keep DateTime + *variables*.
 
     **Every raw row is kept** — repeated timestamps are NOT averaged/collapsed, so
     each acquisition becomes its own point on the index axis (rows the device
     logged at the same second sit side by side rather than being merged into one).
     Rows are stable-sorted by ``DateTime`` so equal timestamps keep their original
-    (acquisition) order. Returns (dataframe, missing_variable_names).
+    (acquisition) order. *date_order*: ``None`` auto-detects; ``True``/``False``
+    forces day-first/month-first. Returns (dataframe, missing_variable_names).
     """
     df = read_ventilator_csv(source, "DateTime")
     if "DateTime" not in df.columns:
@@ -56,7 +60,7 @@ def load_cyclic(source, variables: Sequence[str]) -> Tuple[pd.DataFrame, List[st
             "This CSV has no 'DateTime' column — is it a Cyclic export? "
             f"Columns found: {', '.join(map(str, df.columns[:8]))}…"
         )
-    df["DateTime"] = parse_datetimes(df["DateTime"], dayfirst=True)
+    df["DateTime"] = parse_datetimes(df["DateTime"], dayfirst=True, force=date_order)
     df = df.dropna(subset=["DateTime"])
     if df.empty:
         raise ValueError(
