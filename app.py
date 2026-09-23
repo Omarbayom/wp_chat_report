@@ -23,6 +23,7 @@ import sys
 import tempfile
 import traceback
 import zipfile
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
@@ -170,6 +171,28 @@ with st.form("main_form"):
         "Day first (31/12/2026)": True,
         "Auto-detect": None,
     }[date_order_choice]
+    # Short slugs for the two settings above, folded into the downloaded
+    # filename below so a report generated with a non-default choice is
+    # identifiable later without having to reopen it.
+    date_order_slug = {
+        "Month first (12/31/2026) — default": "monthfirst",
+        "Day first (31/12/2026)": "dayfirst",
+        "Auto-detect": "auto",
+    }[date_order_choice]
+
+    x_mode_choice = st.selectbox(
+        "Cyclic charts default X-axis",
+        options=["Index (default)", "Time"],
+        index=0,
+        help="Which X-axis the Timeline tab's detail chart opens with — the "
+        "reader can still switch it live either way once the report is open. "
+        "**Index**: samples sit at even spacing regardless of real gaps "
+        "between them (a dropout doesn't eat plot width); the axis shows the "
+        "sample number on top and its actual time underneath. **Time**: "
+        "samples sit at their true elapsed-time position, so a real gap in "
+        "recording shows as genuine empty space.",
+    )
+    default_x_mode = "time" if x_mode_choice == "Time" else "index"
 
     c1, c2 = st.columns(2)
     with c1:
@@ -249,6 +272,7 @@ if submitted:
                         max_img_dim=int(max_dim), mode=mode,
                         buffer_minutes=int(buffer_minutes),
                         date_order=date_order,
+                        default_x_mode=default_x_mode,
                     )
 
                 # 2) Word report (and, only when there's no cyclic data, a
@@ -287,9 +311,13 @@ if submitted:
                                for name, h in pages.items())
             n = len(pages)
             st.success(f"Interactive page{'s' if n != 1 else ''} — {n}: {sizes}.")
+            # Filename records today's date plus the two settings above (date
+            # order, default X-axis) so a downloaded report is self-describing
+            # later without having to reopen it to check what generated it.
+            zip_name = f"linked_report_{date.today().isoformat()}_{date_order_slug}_{default_x_mode}.zip"
             st.download_button(
                 label="Download the interactive pages (.zip)",
-                data=buf.getvalue(), file_name="linked_report.zip",
+                data=buf.getvalue(), file_name=zip_name,
                 mime="application/zip",
             )
             if n > 1:

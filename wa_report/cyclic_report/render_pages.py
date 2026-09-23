@@ -61,7 +61,8 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
                       chat_href: str = "report.html", min_photos: int = 3,
                       window_minutes: int = 10, window_hours: int = 12,
                       patient_href: str = "", out_path: Optional[Path] = None,
-                      date_order: Optional[bool] = None) -> str:
+                      date_order: Optional[bool] = None,
+                      default_x_mode: str = "index") -> str:
     """Interactive charts page. The whole cyclic log is embedded and shown; the
     user drags a window over a compressed overview (or types a start/end time, or
     steps through alarms) to zoom the detail chart, and picks any variables on the
@@ -70,7 +71,11 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
 
     *date_order*: ``None`` (default) auto-detects each CSV's day/month order;
     ``True``/``False`` forces day-first/month-first when it's known ahead of
-    time and can't be reliably auto-detected (see ``csv_io.parse_datetimes``)."""
+    time and can't be reliably auto-detected (see ``csv_io.parse_datetimes``).
+
+    *default_x_mode*: ``"index"`` (default) or ``"time"`` — which detail-chart
+    X-axis the page opens with (the reader can still switch it live via the
+    X-axis picker either way; see the client-side X_MODE)."""
     variables = list(variables) or list(DEFAULT_VARIABLES)
     payload, meta = build_payload(folders, cyclic_source, variables,
                                   alarms_source=alarms_source,
@@ -78,6 +83,7 @@ def build_charts_html(folders, cyclic_source, variables: Sequence[str],
                                   window_minutes=window_minutes,
                                   date_order=date_order)
     payload["initialHours"] = window_hours if window_hours > 0 else 12
+    payload["defaultXMode"] = "time" if default_x_mode == "time" else "index"
     # The patient banner is rendered client-side from payload["patients"] so it
     # follows the current view (which patient's segment you're looking at).
     patients = meta.get("patients", [])
@@ -248,12 +254,15 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
                              chat_href: str = "", min_photos: int = 3,
                              window_minutes: int = 10, window_hours: int = 12,
                              out_path: Optional[Path] = None,
-                             date_order: Optional[bool] = None) -> str:
+                             date_order: Optional[bool] = None,
+                             default_x_mode: str = "index") -> str:
     """One self-contained HTML file combining the Timeline (Charts) / Patients
     views as in-page tabs — see the module-level note above for why.
     *date_order*: ``None`` auto-detects; ``True``/``False`` forces
     day-first/month-first for a source known to be ambiguous (see
     ``csv_io.parse_datetimes``).
+    *default_x_mode*: ``"index"``/``"time"`` — which detail-chart X-axis the
+    Timeline tab opens with.
     *chat_href*, when given, stays a **separate** linked file: its nav buttons
     and each photo-burst's 📈 link point at this file with ``?tab=``/``?t=``/
     ``?from&to``, which the init script below turns into the right tab +
@@ -281,7 +290,7 @@ def build_device_report_html(folders, cyclic_source, variables: Sequence[str],
         min_photos=min_photos,
         window_minutes=window_minutes, window_hours=window_hours,
         patient_href="#tab-patients" if has_patients else "",
-        date_order=date_order)
+        date_order=date_order, default_x_mode=default_x_mode)
 
     c_style, c_body, c_data, c_script = _page_fragment(charts_doc, "c")
     # expose the deep-link entry points the cross-tab handler needs
@@ -382,7 +391,8 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
                        window_minutes: int = 10, window_hours: int = 12,
                        max_img_dim: int = 480, mode: str = "hourly",
                        buffer_minutes: int = 0,
-                       date_order: Optional[bool] = None):
+                       date_order: Optional[bool] = None,
+                       default_x_mode: str = "index"):
     """Return a dict of interactive pages:
 
     *date_order*: ``None`` (default) auto-detects each CSV's day/month order
@@ -390,6 +400,9 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
     for when the uploader knows their export's format and the auto-detection
     can't reliably tell (e.g. a short log that never crosses a calendar day;
     see ``csv_io.parse_datetimes`` for exactly when that happens).
+
+    *default_x_mode*: ``"index"`` (default) or ``"time"`` — which detail-chart
+    X-axis charts.html's Timeline tab opens with (switchable live either way).
 
       * ``report.html``  — the chat report (1-hour sections, 24-hour times),
         only when a WhatsApp export was uploaded.
@@ -440,6 +453,7 @@ def build_linked_pages(folders, cyclic_source, variables: Sequence[str],
         alarms_source=alarms_source, chat_href=chat_href,
         min_photos=min_photos, window_minutes=window_minutes,
         window_hours=window_hours, date_order=date_order,
+        default_x_mode=default_x_mode,
     )
     return result
 
@@ -615,6 +629,12 @@ __NOTES__
       <option value="median">Median</option>
     </select>
   </span>
+  <span class="center-ctl" title="Index: samples sit at even spacing regardless of real gaps between them (a dropout doesn't eat plot width) — the top axis shows the sample number, the bottom shows its actual time. Time: samples sit at their real elapsed-time position, so a gap in recording shows as genuine empty space.">
+    X-axis: <select id="x-mode" onchange="setXMode(this.value)">
+      <option value="index">Index</option>
+      <option value="time">Time</option>
+    </select>
+  </span>
 </div>
 
 <div class="viewset">
@@ -717,6 +737,16 @@ let CENTER_MODE = 'avg';   // each plot panel's Y range is centred on the mean (
 function median(arr){ if(!arr.length) return 0; const s=arr.slice().sort((a,b)=>a-b); const m=s.length>>1;
   return s.length%2 ? s[m] : (s[m-1]+s[m])/2; }
 function setCenterMode(m){ CENTER_MODE = (m==='median') ? 'median' : 'avg'; renderDetail(); }
+// Detail chart X-axis: 'index' (default, matches the original behaviour) sits
+// samples at even spacing regardless of real time gaps between them, with a
+// second axis row underneath showing each tick's actual wall-clock time; a
+// dropout then reads as a visible jump in that bottom time row rather than
+// swallowing plot width. 'time' instead sits every sample at its true
+// elapsed-time position, so a real gap in recording shows as genuine empty
+// space on the chart. Purely a display choice — every underlying value stays
+// the same either way. Not persisted (matches CENTER_MODE/VARS/FOCUS above).
+let X_MODE = (DATA.defaultXMode==='time') ? 'time' : 'index';
+function setXMode(m){ X_MODE = (m==='time') ? 'time' : 'index'; renderDetail(); }
 const MODE_COLOR = '#6f42c1', EVENT_COLOR = '#0aa3a3';                 // modes / events
 const SEP_COLOR = '#d98c00';   // cyclic-data-begins separator (before/after alarm log)
 const HOUR = 3600000;
@@ -1448,7 +1478,7 @@ function buildChart(win){
   const modeGap = modeLaneH ? 16 : 0;   // breathing room between the last panel and the modes block
   const nV = VARS.length;
   const PH = panelHeights();                    // focused panel tall, the rest shrunk
-  const N = win.samples.length, useIdx = N>0;   // index axis only when there's cyclic data
+  const N = win.samples.length, useIdx = N>0 && X_MODE==='index';   // index axis only when there's cyclic data AND that mode is selected
   const idxTop = useIdx ? IDX_TOP_H : 0;        // top index axis needs headroom
   const mTop = TOP + idxTop;                    // markers/crosshair start below the index axis
   const H = TOP + idxTop + alarmLaneH + PH.reduce((a,h)=>a+h+PANEL_GAP, 0) + modeGap + modeLaneH + XAXIS_H;
@@ -1479,7 +1509,9 @@ function buildChart(win){
     if(t<=ST[0]) return 0; if(t>=ST[N-1]) return N-1;
     let lo=0, hi=N-1; while(lo<hi){ const m=(lo+hi+1)>>1; if(ST[m]<=t) lo=m; else hi=m-1; }
     const span=ST[lo+1]-ST[lo]; return span>0 ? lo+(t-ST[lo])/span : lo; }
-  function timeAtX(px){ if(N===0) return win.t0+Math.max(0,Math.min(1,(px-plotL)/(plotR-plotL)))*dur;
+  function timeAtX(px){
+    // 'time' mode (or no samples at all): plain linear px<->time, same as xOf's else-branch.
+    if(!useIdx) return win.t0+Math.max(0,Math.min(1,(px-plotL)/(plotR-plotL)))*dur;
     if(N===1) return ST[0];
     const kf=Math.max(0,Math.min(1,(px-plotL)/(plotR-plotL)))*(N-1);
     const k0=Math.floor(kf), k1=Math.min(N-1,k0+1); return ST[k0]+(ST[k1]-ST[k0])*(kf-k0); }
@@ -1560,7 +1592,7 @@ function buildChart(win){
     const flush=()=>{ if(d) parts.push(`<path d="${d}" fill="none" stroke="${col||'#0a6ebd'}" stroke-width="${sw}"/>`); d=''; pen=false; };
     win.samples.forEach((s,si)=>{ const val=s[c]; if(val==null){ flush(); return; }
       const cc=colorAt(s[0]); if(cc!==col){ flush(); col=cc; }
-      const x=xOfIdx(si), y=yOf(k,val); d += (pen?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' '; pen=true; });
+      const x=(useIdx?xOfIdx(si):xOf(s[0])), y=yOf(k,val); d += (pen?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' '; pen=true; });
     flush();
     parts.push(`<line class="hg" id="hg-d-${k}" x1="${plotL}" x2="${plotR}" y1="0" y2="0" stroke="#c0392b" stroke-width="0.8" stroke-dasharray="4 3" visibility="hidden"/>`);
     parts.push(`<circle class="dot" id="dot-d-${k}" r="3" fill="#c0392b" visibility="hidden"/>`); });
@@ -1649,6 +1681,7 @@ function buildChart(win){
   ro.innerHTML = rows;
   CTRL.win=win; CTRL.svg=svg; CTRL.xOf=xOf; CTRL.yOf=yOf; CTRL.H=H;
   CTRL.xOfIdx=xOfIdx; CTRL.timeAtX=timeAtX;   // index→px and px→time (index-aware)
+  CTRL.useIdx=useIdx;   // which X-axis mode is actually in effect for this render
   CTRL.bands=VARS.map((v,k)=>[panelTop(k), panelTop(k)+PH[k], v]);
   CTRL.alarmT=win.alarms.map(a=>a[0]);   // alarm times, for magnetic cursor snap
   // before-strip: lets the pre-cyclic alarm history be hovered/browsed too
@@ -2072,7 +2105,7 @@ function updateAt(t, exact){ const win=CTRL.win; if(!win) return;
 
   if(onData){
     const s=win.samples[si]; anchor = snap? at[ai] : s[0];
-    const sx=CTRL.xOfIdx ? CTRL.xOfIdx(si) : CTRL.xOf(s[0]);
+    const sx=CTRL.useIdx ? CTRL.xOfIdx(si) : CTRL.xOf(s[0]);
     // is there actually cyclic data at the anchor? (else values read "—") —
     // always true here when !snap (that's what onData just required), but a
     // snapped alarm can still land inside a gap, so keep the check for it.
@@ -2181,6 +2214,7 @@ function lockAt(ts, noScroll, exact){ if(!CTRL.win) return; CTRL.locked=true;
 // moment; a ?from&to= deep-link (a patient segment) sets the window to that
 // exact span.
 document.getElementById('q-width').value = String(DATA.initialHours);
+document.getElementById('x-mode').value = X_MODE;
 buildOverview();
 (function(){
   const p=new URLSearchParams(location.search);
